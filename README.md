@@ -1,108 +1,140 @@
-# Nano Banana Infinimap
+# Nano Banana Infinimap (Vertex + Python Service)
 
-An experimental AI-powered infinite map generator that creates seamless, neighbor-aware tiles on demand.
+An experimental infinite map generator that creates seamless, neighbor-aware tiles on demand.
 
-**⚠️ Experimental Software**: This project is an experimental demonstration of the Gemini Nano Banana model's potential and should be used at your own risk.
+This fork runs image generation through a local Python FastAPI service backed by Vertex AI, and the Next.js app calls that service.
 
-<img width="1502" height="510" alt="image" src="https://github.com/user-attachments/assets/45c19d3b-5f6a-44cc-a085-a51693f9250b" />
+## Stack
 
-## TL;DR
+- Next.js 15 + TypeScript
+- Sharp image processing
+- Local file-based tile store
+- Python FastAPI image service (`pyservice/`)
+- Vertex AI model default: `gemini-2.5-flash-image`
 
-This is an experiment I made to test Nano Banana's ability to consistently infill, plus how to handle minor differences in renders by blending outputs.
-The solution I hit on was to break the image up into many tiles, of which a 3x3 grid of tiles can fit comfily into Gemini's input limits. I then radially blend the generations with the previous tiles (if one exists at that position) to handle minor differences.
-You can use it to generate gigantic, continuous maps at a reasonable cost.
-
-## Caveats
-
-- To promote accurate infills I use a photoshop-esque background matte (i.e. checkerboard) which greatly improved Nano Banana's willingness to just fill in the blank spaces without changing anything. But, this is maybe only 75% accurate. Sometimes you just have to regenerate, especially if it's rendering something decent (just misaligned)
-- Sometimes nothing will render at all, and you still pay the nickle to Google for the render. Sad. When it repeatedly renders nothing either make your text prompt more explicit or move over a tile and try there.
-- This was vibe coded in an afternoon to test the concept, so I make no guarantees that the code is comprehensible or friendly. But you should be able to tweak the major knobs if you're so inclined.
-
-## Features
-
-- 🗺️ Infinite(-ish), explorable map with Leaflet-based navigation
-- 🤖 AI-powered tile generation using Google's Nano Banana model
-- 🔗 Neighbor-aware generation for seamless tile edges
-- 💾 Local-first architecture with file-based storage
-
-## Installation
-
-### Prerequisites
+## Prerequisites
 
 - Node.js 18+
-- Yarn package manager
-- Google Cloud Platform account with Gemini API access
+- Corepack (bundled with modern Node.js)
+- Python 3.10+
+- Google Cloud CLI (`gcloud`)
+- A Google Cloud project with Vertex AI API enabled
 
-### Setup
+## Setup
 
-1. Clone the repository:
+1. Install JavaScript dependencies:
+
 ```bash
-git clone https://github.com/seezatnap/nano-banana-infinimap.git
-cd infinimap
+corepack yarn install
 ```
 
-2. Install dependencies:
+2. Create a Python virtual environment and install packages:
+
 ```bash
-yarn
+python -m venv .venv
+.venv\Scripts\python -m pip install --upgrade pip
+.venv\Scripts\pip install -r pyservice/requirements.txt
 ```
 
-3. Configure environment variables:
+3. Create local environment file:
+
 ```bash
-cp .env.local.example .env.local
+copy .env.local.example .env.local
 ```
 
-4. Add your Gemini API key to `.env.local`:
+4. Configure Vertex authentication (ADC):
+
+```bash
+gcloud auth application-default login
+gcloud config set project lucid-formula-484716-e0
+gcloud auth application-default set-quota-project lucid-formula-484716-e0
+gcloud services enable aiplatform.googleapis.com
+```
+
+5. Optional: if you prefer API key auth instead of ADC, set:
+
 ```env
-GEMINI_API_KEY=your-api-key-here
+VERTEX_AUTH_MODE="api_key"
+GOOGLE_API_KEY_PROFILE="gemini" # or "aistudio"
+GOOGLE_CLOUD_API_KEY_BACKEND="auto" # auto | gemini | vertex
+GOOGLE_CLOUD_API_KEY_GEMINI="your-gemini-key"
+GOOGLE_CLOUD_API_KEY_AISTUDIO="your-aistudio-key"
 ```
 
-You can obtain a Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+6. Edit `.env.local` if needed:
 
-5. Start the development server:
+```env
+PY_IMAGE_SERVICE_URL="http://127.0.0.1:8001"
+PY_IMAGE_SERVICE_TIMEOUT_MS="120000"
+PY_IMAGE_SERVICE_MAX_ATTEMPTS="1"
+VERTEX_PROJECT_ID="lucid-formula-484716-e0"
+VERTEX_LOCATION="us-central1"
+VERTEX_AUTH_MODE="api_key"
+VERTEX_MODEL="gemini-2.5-flash-image"
+VERTEX_MODEL_FALLBACKS=""
+VERTEX_RESPONSE_MODALITIES="IMAGE"
+VERTEX_IMAGE_SIZE="1K"
+VERTEX_ASPECT_RATIO="1:1"
+VERTEX_OUTPUT_MIME_TYPE="image/png"
+VERTEX_MAX_OUTPUT_TOKENS="4096"
+VERTEX_HTTP_TIMEOUT_MS="105000"
+VERTEX_STREAM_TIMEOUT_MS="90000"
+VERTEX_RETRY_AFTER_SECONDS="30"
+GOOGLE_API_KEY_PROFILE="gemini"
+GOOGLE_CLOUD_API_KEY_BACKEND="auto"
+GOOGLE_CLOUD_API_KEY_GEMINI=""
+GOOGLE_CLOUD_API_KEY_AISTUDIO=""
+GOOGLE_CLOUD_API_KEY=""
+ALLOW_STUB_FALLBACK="0"
+```
+
+## Run
+
+Start Python service:
+
 ```bash
-yarn dev
+corepack yarn dev:py
 ```
 
-6. Open http://localhost:3000 in your browser
-
-## Getting Started
-
-1. **Navigate the Map**: Use your mouse to pan and scroll to zoom
-2. **Generate Your First Tile**: 
-   - Zoom in to the maximum level (level 8)
-   - Enter a prompt like "isometric video game island" or "ancient temple ruins"
-   - Click on any empty tile to bring up the tile menu
-3. **Explore**: Generate more tiles to extend your canvas
-   - New tiles blend into old tiles, and you can either accept or reject them if it causes the older tiles to degrade
-   - Nano Banana isn't perfect, so you may need to re-roll a few times to get a good match for your existing tiles
-5. **Regenerate**: Click on existing tiles to regenerate, edit, or delete them
-   - Useful if you get a bad blend or generate a tile with neighbors outside the 3x3 grid. regen it, or delete and make a new one.
-
-## Development
+Start web app in another terminal:
 
 ```bash
-yarn dev        # Start development server
+corepack yarn dev
 ```
 
-### Project Structure
+Open `http://localhost:3000`.
 
+## Health Check
+
+Check Python service:
+
+```bash
+curl http://127.0.0.1:8001/healthz
 ```
-infinimap/
-├── app/          # Next.js app directory
-├── components/   # React components
-├── lib/          # Core logic and utilities
-├── public/       # Static assets
-└── scripts/      # Utility scripts
-```
 
-## License
+Expected result includes:
 
-MIT License - see [LICENSE](LICENSE) file for details.
+- `ok: true`
+- `vertex_project_id`
+- `vertex_location`
+- `vertex_auth_mode`
+- `effective_auth_mode`
+- `api_key_profile`
+- `api_key_backend`
+- `vertex_model`
+- `auth_mode`
+- `candidate_models`
+- `response_modalities`
+- `image_size`
+- `http_timeout_ms`
+- `stream_timeout_ms`
 
-## Author
+## Notes
 
-[@seezatnap](https://twitter.com/seezatnap)
-
-## Contributing
-
-This is experimental software, and meant as a demonstration of Nano Banana more than an ongoing project. I'll try to fix bugs with the current state, but I'm not likely to accept new features. I encourage you to fork, copy, or vibe on top of this project and make it your own!
+- `GOOGLE_API_KEY_PROFILE` is the single switch to swap keys (`gemini` or `aistudio`).
+- `GOOGLE_CLOUD_API_KEY_BACKEND="auto"` detects backend by key pattern (`AIza...` => Gemini Developer API, otherwise Vertex API key path).
+- Gemini Developer API path does not use `image_size`/`output_mime_type`; the service adapts config automatically.
+- `VERTEX_MODEL_FALLBACKS` is comma-separated and optional.
+- Defaults are tuned for responsiveness (`IMAGE` only, `1K`, server stream timeout 90s).
+- Stub tile fallback is disabled by default (`ALLOW_STUB_FALLBACK="0"`), so generation errors are visible instead of silent solid-color tiles.
+- Rate limit responses are surfaced as `429` with `Retry-After`, instead of being collapsed into generic `500`.

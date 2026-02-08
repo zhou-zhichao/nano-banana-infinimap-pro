@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/.venv
 /.pnp
 .pnp.js
 .yarn/install-state.gz
@@ -51,3 +52,5 @@ next-env.d.ts
 .idea/
 *.swp
 *.swo
+*.pyc
+__pycache__/

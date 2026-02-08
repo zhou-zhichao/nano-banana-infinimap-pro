@@ -384,9 +384,9 @@ Comprehensive set of API routes for tile-related operations:
 - (lib/coords.ts): Coordinate and tile-related utilities
   - Defines tile and zoom constants
   - Provides parent/child tile calculations
-- (lib/gemini.ts): Google GenAI client configuration
+- (lib/pythonImageService.ts): Node-to-Python bridge for image generation
 - (lib/generator.ts): Tile generation logic
-  - Uses Gemini AI for image generation
+  - Uses local Python FastAPI + Vertex model for image generation
   - Supports neighbor-aware generation
   - Handles fallback generation
 - (lib/hashing.ts): Cryptographic utilities

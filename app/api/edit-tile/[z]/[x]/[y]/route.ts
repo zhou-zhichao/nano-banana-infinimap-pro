@@ -6,6 +6,7 @@ import path from "path";
 import { generateGridPreview } from "@/lib/generator";
 import { readTileFile } from "@/lib/storage";
 import { TILE } from "@/lib/coords";
+import { PythonImageServiceError } from "@/lib/pythonImageService";
 
 const TILE_SIZE = TILE;
 
@@ -146,9 +147,24 @@ export async function POST(
     return NextResponse.json({ previewUrl: `/api/preview/${previewId}`, previewId });
   } catch (error) {
     console.error("Edit tile error:", error);
+    let status = 500;
+    const headers: Record<string, string> = {};
+    if (error instanceof z.ZodError) {
+      status = 400;
+    } else if (error instanceof PythonImageServiceError && error.statusCode) {
+      status = error.statusCode;
+      if (error.retryAfterSeconds && error.retryAfterSeconds > 0) {
+        headers["Retry-After"] = String(error.retryAfterSeconds);
+      }
+    } else if (error instanceof Error && /python image service\s+(\d{3})/i.test(error.message)) {
+      const match = error.message.match(/python image service\s+(\d{3})/i);
+      if (match) status = Number(match[1]);
+    }
+
+    const message = error instanceof Error ? error.message : "Failed to edit tile";
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to edit tile" },
-      { status: 500 }
+      { error: message },
+      { status, headers }
     );
   }
 }

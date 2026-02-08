@@ -26,7 +26,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
   const [loading, setLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const [blendPreview, setBlendPreview] = useState<boolean>(true);
+  const [blendPreview, setBlendPreview] = useState<boolean>(false);
   const [offsetX, setOffsetX] = useState<number>(0);
   const [offsetY, setOffsetY] = useState<number>(0);
   const [driftPeak, setDriftPeak] = useState<number | null>(null);
@@ -283,8 +283,8 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
         body: JSON.stringify({ 
           previewUrl: `/api/preview/${previewId}`,
           selectedPositions: Array.from(selectedPositions).map(s => { const [sx,sy] = s.split(',').map(Number); return { x: sx, y: sy }; }),
-          offsetX: blendPreview && nudgeApplied ? Math.round(offsetX) : undefined,
-          offsetY: blendPreview && nudgeApplied ? Math.round(offsetY) : undefined,
+          offsetX: nudgeApplied ? Math.round(offsetX) : undefined,
+          offsetY: nudgeApplied ? Math.round(offsetY) : undefined,
         }),
       });
       if (!response.ok) throw new Error("Failed to confirm edits");
@@ -345,14 +345,32 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10000]" />
-        <Dialog.Content data-dialog-root className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-2xl shadow-xl p-0 w-[min(100vw,800px)] max-h-[90vh] overflow-auto z-[10001]">
+        <Dialog.Overlay data-dialog-root className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10000]" />
+        <Dialog.Content
+          data-dialog-root
+          onPointerDownOutside={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+          className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-2xl shadow-xl p-0 w-[min(100vw,800px)] max-h-[90vh] overflow-auto z-[10001]"
+        >
           <div className="flex flex-col h-full">
             <div className="px-4 pt-4">
-              <Dialog.Title className="text-lg">Generate Preview</Dialog.Title>
-              <Dialog.Description className="text-xs mb-3">
-                Provide a prompt, review the 3×3 preview, then approve changes.
-              </Dialog.Description>
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <Dialog.Title className="text-lg">Generate Preview</Dialog.Title>
+                  <Dialog.Description className="text-xs">
+                    Provide a prompt, review the 3x3 preview, then approve changes.
+                  </Dialog.Description>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs text-gray-700 hover:bg-gray-50"
+                  aria-label="Close preview modal (Esc)"
+                >
+                  <Close className="h-3.5 w-3.5" />
+                  Close (Esc)
+                </button>
+              </div>
             </div>
 
             <div className="px-4 pb-4 space-y-4 flex-1">
@@ -410,7 +428,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
                             <Settings className="h-4 w-4" />
                           </button>
                         </DropdownMenu.Trigger>
-                        <DropdownMenu.Content align="end" className="bg-white rounded-md shadow border p-1 text-sm z-[10002]">
+                        <DropdownMenu.Content data-dialog-root align="end" className="bg-white rounded-md shadow border p-1 text-sm z-[10002]">
                           <div className="px-2 py-1 text-[11px] text-gray-600">Preview Settings</div>
                           <div className="my-1 h-px bg-gray-200" />
                           <div className="px-1 py-1">
@@ -590,7 +608,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
                             }}
                           >
                             {/* simple icon via CSS caret */}
-                            <span className={`transition-transform ${nudgeOpen ? 'rotate-90' : ''}`}>▸</span>
+                            <span className={`transition-transform ${nudgeOpen ? 'rotate-90' : ''}`}>{'>'}</span>
                             <span className="text-[11px]">Nudge</span>
                           </button>
                         </Tooltip.Trigger>
@@ -656,6 +674,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
                         onChange={async (e) => {
                           const v = parseInt(e.target.value, 10) || 0;
                           setOffsetX(v);
+                          setNudgeApplied(true);
                           if (previewId && blendPreview) await loadPreviewTiles(previewId, true);
                         }}
                       />
@@ -669,6 +688,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
                         onChange={async (e) => {
                           const v = parseInt(e.target.value, 10) || 0;
                           setOffsetY(v);
+                          setNudgeApplied(true);
                           if (previewId && blendPreview) await loadPreviewTiles(previewId, true);
                         }}
                       />

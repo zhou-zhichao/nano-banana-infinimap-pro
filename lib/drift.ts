@@ -1,8 +1,34 @@
 import sharp from "sharp";
+import { readTileFile } from "@/lib/storage";
 
 // Utilities for drift detection using phase correlation on 256x256 tiles.
 
 export type DriftResult = { dx: number; dy: number; peakValue: number };
+export type DriftCorrectionSource = "auto" | "none";
+export type EstimatedGridDrift = {
+  applied: boolean;
+  tx: number;
+  ty: number;
+  candidateCount: number;
+  confidence: number;
+  source: DriftCorrectionSource;
+};
+
+export type EstimateGridDriftParams = {
+  rawComposite: Buffer;
+  z: number;
+  centerX: number;
+  centerY: number;
+  selectedSet?: Set<string> | null;
+  tileSize: number;
+  maxShiftPx?: number;
+  minPeakSingle?: number;
+  minPeakMulti?: number;
+};
+
+const DEFAULT_MAX_SHIFT_PX = 64;
+const DEFAULT_MIN_PEAK_SINGLE = 0.03;
+const DEFAULT_MIN_PEAK_MULTI = 0.015;
 
 // Load grayscale float image from a Buffer (values in [0,1])
 export async function loadGrayFloatFromBuffer(buf: Buffer): Promise<{ pixels: Float64Array; width: number; height: number }>{
@@ -176,8 +202,142 @@ export async function translateImage(buf: Buffer, width: number, height: number,
     .toBuffer();
 }
 
-// Compute drift using the CENTER 256×256 tile between baseComposite and rawComposite (both 768×768),
-// then return the translated rawComposite aligned onto base coordinates.
+// Utility average helper.
+function mean(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+// Estimate global translation for a 3x3 raw composite using available existing tiles.
+// tx/ty semantics: values are the exact translation passed to translateImage(..., tx, ty).
+export async function estimateGridDriftFromExistingTiles(
+  params: EstimateGridDriftParams
+): Promise<EstimatedGridDrift> {
+  const {
+    rawComposite,
+    z,
+    centerX,
+    centerY,
+    selectedSet = null,
+    tileSize,
+    maxShiftPx = DEFAULT_MAX_SHIFT_PX,
+    minPeakSingle = DEFAULT_MIN_PEAK_SINGLE,
+    minPeakMulti = DEFAULT_MIN_PEAK_MULTI,
+  } = params;
+
+  const candidates: { tx: number; ty: number; peakValue: number }[] = [];
+
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const tileX = centerX + dx;
+      const tileY = centerY + dy;
+      const key = `${tileX},${tileY}`;
+      if (selectedSet && !selectedSet.has(key)) continue;
+
+      const existingTile = await readTileFile(z, tileX, tileY);
+      if (!existingTile) continue;
+
+      const rawTile = await sharp(rawComposite)
+        .extract({
+          left: (dx + 1) * tileSize,
+          top: (dy + 1) * tileSize,
+          width: tileSize,
+          height: tileSize,
+        })
+        .png()
+        .toBuffer();
+
+      const existingTilePng = await sharp(existingTile)
+        .resize(tileSize, tileSize, { fit: "fill" })
+        .png()
+        .toBuffer();
+
+      const A = await loadGrayFloatFromBuffer(existingTilePng);
+      const B = await loadGrayFloatFromBuffer(rawTile);
+      if (A.width !== tileSize || A.height !== tileSize || B.width !== tileSize || B.height !== tileSize) {
+        continue;
+      }
+
+      const { dx: phaseDx, dy: phaseDy, peakValue } = phaseCorrelationShift(A.pixels, B.pixels, tileSize, tileSize);
+      const tx = Math.round(phaseDx);
+      const ty = Math.round(phaseDy);
+      if (Math.abs(tx) > maxShiftPx || Math.abs(ty) > maxShiftPx) continue;
+      if (peakValue < minPeakMulti) continue;
+
+      candidates.push({ tx, ty, peakValue });
+    }
+  }
+
+  const candidateCount = candidates.length;
+  if (candidateCount === 0) {
+    return {
+      applied: false,
+      tx: 0,
+      ty: 0,
+      candidateCount: 0,
+      confidence: 0,
+      source: "none",
+    };
+  }
+
+  const confidence = mean(candidates.map((c) => c.peakValue));
+
+  if (candidateCount === 1) {
+    const single = candidates[0];
+    if (single.peakValue < minPeakSingle) {
+      return {
+        applied: false,
+        tx: 0,
+        ty: 0,
+        candidateCount,
+        confidence,
+        source: "none",
+      };
+    }
+
+    return {
+      applied: true,
+      tx: single.tx,
+      ty: single.ty,
+      candidateCount,
+      confidence,
+      source: "auto",
+    };
+  }
+
+  const weightedSum = candidates.reduce(
+    (acc, item) => {
+      const weight = Math.max(item.peakValue, 0);
+      acc.tx += item.tx * weight;
+      acc.ty += item.ty * weight;
+      acc.weight += weight;
+      return acc;
+    },
+    { tx: 0, ty: 0, weight: 0 }
+  );
+
+  if (weightedSum.weight <= 0) {
+    return {
+      applied: false,
+      tx: 0,
+      ty: 0,
+      candidateCount,
+      confidence,
+      source: "none",
+    };
+  }
+
+  return {
+    applied: true,
+    tx: Math.round(weightedSum.tx / weightedSum.weight),
+    ty: Math.round(weightedSum.ty / weightedSum.weight),
+    candidateCount,
+    confidence,
+    source: "auto",
+  };
+}
+
+// Legacy center-tile alignment helper used by preview blending fallback.
 export async function alignCompositeOverBase(
   baseComposite: Buffer,
   rawComposite: Buffer,
@@ -190,7 +350,7 @@ export async function alignCompositeOverBase(
 
   const A = await loadGrayFloatFromBuffer(baseCenter);
   const B = await loadGrayFloatFromBuffer(rawCenter);
-  // Only proceed when dimensions are 256×256 (power of two)
+  // Only proceed when dimensions are 256x256 (power of two)
   if (A.width !== tileSize || A.height !== tileSize || B.width !== tileSize || B.height !== tileSize) {
     return { aligned: rawComposite, dx: 0, dy: 0, peakValue: 0 };
   }
