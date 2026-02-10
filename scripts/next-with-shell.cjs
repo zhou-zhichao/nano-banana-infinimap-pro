@@ -7,12 +7,26 @@ if (!nextArg) {
   process.exit(1);
 }
 
+const rawArgs = process.argv.slice(3);
+const nextArgs = [nextArg, ...rawArgs];
+
+const needsHostnameDefault = nextArg === "dev" || nextArg === "start";
+if (needsHostnameDefault) {
+  const hasHostnameArg = rawArgs.some((arg) =>
+    arg === "-H" || arg === "--hostname" || arg.startsWith("--hostname=")
+  );
+
+  if (!hasHostnameArg) {
+    nextArgs.push("--hostname", process.env.NEXT_HOST || "0.0.0.0");
+  }
+}
+
 if (process.platform === "win32") {
   process.env.SHELL = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
 }
 
 const nextBin = require.resolve("next/dist/bin/next");
-const child = spawn(process.execPath, [nextBin, ...process.argv.slice(2)], {
+const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   stdio: "inherit",
   env: process.env,
 });

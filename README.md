@@ -64,6 +64,9 @@ GOOGLE_CLOUD_API_KEY_AISTUDIO="your-aistudio-key"
 6. Edit `.env.local` if needed:
 
 ```env
+NEXT_HOST="0.0.0.0"
+BASIC_AUTH_USER="admin"
+BASIC_AUTH_PASSWORD="change-this-password"
 PY_IMAGE_SERVICE_URL="http://127.0.0.1:8001"
 PY_IMAGE_SERVICE_TIMEOUT_MS="120000"
 PY_IMAGE_SERVICE_MAX_ATTEMPTS="1"
@@ -103,6 +106,35 @@ corepack yarn dev
 ```
 
 Open `http://localhost:3000`.
+
+This project now binds Next.js to `0.0.0.0` by default for `dev` and `start` (override with `NEXT_HOST` if needed).
+
+## Public Internet Access + Password
+
+1. Set password protection in `.env.local`:
+
+```env
+BASIC_AUTH_USER="your-user"
+BASIC_AUTH_PASSWORD="your-strong-password"
+```
+
+2. Keep Python service local-only (already default): `127.0.0.1:8001`.
+
+3. Expose only the Next.js app (`3000`) to the internet:
+
+- Recommended quick method (Cloudflare Tunnel):
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:3000
+```
+
+- Or use router port-forwarding / a reverse proxy to your host on port `3000`.
+
+4. Open the public URL. Browser will prompt for Basic Auth credentials.
+
+Notes:
+- If `BASIC_AUTH_USER` or `BASIC_AUTH_PASSWORD` is empty, auth is disabled.
+- Use a strong password before exposing the service publicly.
 
 ## Health Check
 
