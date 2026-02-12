@@ -173,3 +173,65 @@ Expected result includes:
 - Defaults are tuned for responsiveness (`IMAGE` only, `1K`, server stream timeout 90s).
 - Stub tile fallback is disabled by default (`ALLOW_STUB_FALLBACK="0"`), so generation errors are visible instead of silent solid-color tiles.
 - Rate limit responses are surfaced as `429` with `Retry-After`, instead of being collapsed into generic `500`.
+
+## Import NASA Moon Background Tiles
+
+This repo includes a Python tool for importing a NASA Moon tile range into local `.tiles/` so `lib/storage.ts` can read them directly.
+
+Default source range:
+- `z=8`
+- `x=100..140`
+- `y=300..360`
+
+Default behavior:
+- Saves to `.tiles/{z}_{x}_{y}.webp`
+- Uses `window-zero` mapping (`dstX=srcX-100`, `dstY=srcY-300`)
+- Uses moderate rate settings (`concurrency=4`, request spacing + jitter, retries on `429/5xx`)
+- Does not write max-zoom `.meta` records
+- Runs parent regeneration (`scripts/regen-parents.cjs`) when new tiles were downloaded
+
+Run with defaults:
+
+```bash
+corepack yarn tools:moon:import
+```
+
+Dry-run mapping preview (no downloads):
+
+```bash
+python tools/import_nasa_moon_tiles.py --dry-run
+```
+
+Custom range / mapping example:
+
+```bash
+corepack yarn tools:moon:import:custom -- --x-min 100 --x-max 101 --y-min 300 --y-max 301 --map-mode offset --offset-x 10 --offset-y -256 --no-generate-parents
+```
+
+Useful flags:
+- `--overwrite`
+- `--concurrency`
+- `--min-interval-ms`
+- `--jitter-ms`
+- `--max-retries`
+- `--timeout-ms`
+
+### Git LFS for `.tiles` (recommended)
+
+If you want forks/clones to reuse the downloaded moon background tiles without re-crawling, store `.tiles/*.webp` in Git LFS.
+
+One-time setup:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+After clone/fork:
+
+```bash
+git lfs pull
+```
+
+CI note:
+- If your CI needs local `.tiles` files, enable LFS fetch in checkout; otherwise only pointer files are present.

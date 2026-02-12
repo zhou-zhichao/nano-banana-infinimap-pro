@@ -39,7 +39,9 @@ yarn-error.log*
 next-env.d.ts
 
 # generated tile data
-/.tiles/
+/.tiles/*
+!/.tiles/
+!/.tiles/*.webp
 /.meta/
 /.locks/
 /.queue/

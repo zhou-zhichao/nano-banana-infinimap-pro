@@ -10,7 +10,9 @@
     "build": "node scripts/next-with-shell.cjs build",
     "start": "node scripts/next-with-shell.cjs start",
     "lint": "next lint",
-    "regen:parents": "node scripts/regen-parents.cjs"
+    "regen:parents": "node scripts/regen-parents.cjs",
+    "tools:moon:import": "python tools/import_nasa_moon_tiles.py",
+    "tools:moon:import:custom": "python tools/import_nasa_moon_tiles.py"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
