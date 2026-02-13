@@ -57,7 +57,7 @@ gcloud services enable aiplatform.googleapis.com
 VERTEX_AUTH_MODE="api_key"
 GOOGLE_API_KEY_PROFILE="gemini" # or "aistudio"
 GOOGLE_CLOUD_API_KEY_BACKEND="auto" # auto | gemini | vertex
-GOOGLE_CLOUD_API_KEY_GEMINI="your-gemini-key"
+GOOGLE_CLOUD_API_KEY_GEMINI="your-gemini-key-1,your-gemini-key-2,your-gemini-key-3" # round-robin by request
 GOOGLE_CLOUD_API_KEY_AISTUDIO="your-aistudio-key"
 ```
 
@@ -86,7 +86,7 @@ VERTEX_STREAM_TIMEOUT_MS="90000"
 VERTEX_RETRY_AFTER_SECONDS="30"
 GOOGLE_API_KEY_PROFILE="gemini"
 GOOGLE_CLOUD_API_KEY_BACKEND="auto"
-GOOGLE_CLOUD_API_KEY_GEMINI=""
+GOOGLE_CLOUD_API_KEY_GEMINI="" # single key or comma-separated key pool
 GOOGLE_CLOUD_API_KEY_AISTUDIO=""
 GOOGLE_CLOUD_API_KEY=""
 ALLOW_STUB_FALLBACK="0"
@@ -207,6 +207,7 @@ Expected result includes:
 ## Notes
 
 - `GOOGLE_API_KEY_PROFILE` is the single switch to swap keys (`gemini` or `aistudio`).
+- `GOOGLE_CLOUD_API_KEY_GEMINI` / `GOOGLE_CLOUD_API_KEY_AISTUDIO` can be comma-separated key pools; the Python service rotates keys in round-robin per generation request.
 - `GOOGLE_CLOUD_API_KEY_BACKEND="auto"` detects backend by key pattern (`AIza...` => Gemini Developer API, otherwise Vertex API key path).
 - Gemini Developer API path does not use `image_size`/`output_mime_type`; the service adapts config automatically.
 - `VERTEX_MODEL_FALLBACKS` is comma-separated and optional.

@@ -4,8 +4,10 @@ import base64
 import binascii
 import logging
 import os
+import re
 import time
 from functools import lru_cache
+from threading import Lock
 from typing import Tuple
 
 from dotenv import load_dotenv
@@ -33,6 +35,9 @@ DEFAULT_MAX_OUTPUT_TOKENS = 4096
 DEFAULT_AUTH_MODE = "auto"
 DEFAULT_KEY_PROFILE = "gemini"
 DEFAULT_API_KEY_BACKEND = "auto"
+
+_api_key_round_robin_lock = Lock()
+_api_key_round_robin_cursor = 0
 
 
 class GenerateGridRequest(BaseModel):
@@ -67,19 +72,48 @@ def get_vertex_model() -> str:
     return os.environ.get("VERTEX_MODEL", DEFAULT_MODEL)
 
 
-def get_google_cloud_api_key() -> str:
+def parse_api_key_list(raw_value: str) -> list[str]:
+    ordered: list[str] = []
+    for token in re.split(r"[,\n;]", raw_value):
+        key = token.strip()
+        if key and key not in ordered:
+            ordered.append(key)
+    return ordered
+
+
+def get_google_cloud_api_keys() -> list[str]:
     profile = get_api_key_profile()
+    configured_pool = ""
     if profile == "gemini":
-        return (
-            (os.environ.get("GOOGLE_CLOUD_API_KEY_GEMINI") or "").strip()
-            or (os.environ.get("GOOGLE_CLOUD_API_KEY") or "").strip()
-        )
-    if profile == "aistudio":
-        return (
-            (os.environ.get("GOOGLE_CLOUD_API_KEY_AISTUDIO") or "").strip()
-            or (os.environ.get("GOOGLE_CLOUD_API_KEY") or "").strip()
-        )
-    return (os.environ.get("GOOGLE_CLOUD_API_KEY") or "").strip()
+        configured_pool = (os.environ.get("GOOGLE_CLOUD_API_KEY_GEMINI") or "").strip()
+    elif profile == "aistudio":
+        configured_pool = (os.environ.get("GOOGLE_CLOUD_API_KEY_AISTUDIO") or "").strip()
+
+    fallback_pool = (os.environ.get("GOOGLE_CLOUD_API_KEY") or "").strip()
+    ordered = parse_api_key_list(configured_pool)
+    for key in parse_api_key_list(fallback_pool):
+        if key not in ordered:
+            ordered.append(key)
+    return ordered
+
+
+def get_google_cloud_api_key() -> str:
+    keys = get_google_cloud_api_keys()
+    if not keys:
+        return ""
+    return keys[0]
+
+
+def get_next_google_cloud_api_key() -> tuple[str, int, int]:
+    api_keys = get_google_cloud_api_keys()
+    if not api_keys:
+        return "", -1, 0
+
+    global _api_key_round_robin_cursor
+    with _api_key_round_robin_lock:
+        key_index = _api_key_round_robin_cursor % len(api_keys)
+        _api_key_round_robin_cursor += 1
+    return api_keys[key_index], key_index, len(api_keys)
 
 
 def get_api_key_profile() -> str:
@@ -240,24 +274,49 @@ def get_candidate_models(preferred_model: str | None = None) -> list[str]:
     return ordered
 
 
-@lru_cache(maxsize=1)
-def get_client() -> genai.Client:
-    project = get_vertex_project()
-    api_key = get_google_cloud_api_key()
-    auth_mode = get_effective_auth_mode()
+@lru_cache(maxsize=16)
+def get_api_key_client(api_key: str, backend: str, timeout_ms: int) -> genai.Client:
     # google-genai expects timeout in milliseconds.
-    http_options = types.HttpOptions(timeout=get_http_timeout_ms())
+    http_options = types.HttpOptions(timeout=timeout_ms)
+    if backend == "gemini":
+        return genai.Client(api_key=api_key, http_options=http_options)
+    return genai.Client(vertexai=True, api_key=api_key, http_options=http_options)
+
+
+@lru_cache(maxsize=1)
+def get_vertex_client(project: str, location: str, timeout_ms: int) -> genai.Client:
+    # google-genai expects timeout in milliseconds.
+    http_options = types.HttpOptions(timeout=timeout_ms)
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project)
+    os.environ.setdefault("GCLOUD_PROJECT", project)
+    return genai.Client(
+        vertexai=True,
+        project=project,
+        location=location,
+        http_options=http_options,
+    )
+
+
+def get_client() -> tuple[genai.Client, str]:
+    project = get_vertex_project()
+    auth_mode = get_effective_auth_mode()
 
     if auth_mode == "api_key":
+        api_key, key_index, key_count = get_next_google_cloud_api_key()
         if not api_key:
             raise RuntimeError(
                 "VERTEX_AUTH_MODE=api_key requires GOOGLE_CLOUD_API_KEY, "
                 "or the selected profile key in GOOGLE_CLOUD_API_KEY_GEMINI/GOOGLE_CLOUD_API_KEY_AISTUDIO."
             )
         backend = resolve_api_key_backend(api_key)
-        if backend == "gemini":
-            return genai.Client(api_key=api_key, http_options=http_options)
-        return genai.Client(vertexai=True, api_key=api_key, http_options=http_options)
+        if key_count > 1:
+            logger.info(
+                "Using API key %s/%s for profile '%s'",
+                key_index + 1,
+                key_count,
+                get_api_key_profile(),
+            )
+        return get_api_key_client(api_key, backend, get_http_timeout_ms()), backend
 
     if not project:
         if auth_mode == "adc":
@@ -268,14 +327,7 @@ def get_client() -> genai.Client:
             "Missing Vertex credentials. Set VERTEX_PROJECT_ID for ADC mode or "
             "set VERTEX_AUTH_MODE=api_key with GOOGLE_CLOUD_API_KEY."
         )
-    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project)
-    os.environ.setdefault("GCLOUD_PROJECT", project)
-    return genai.Client(
-        vertexai=True,
-        project=project,
-        location=get_vertex_location(),
-        http_options=http_options,
-    )
+    return get_vertex_client(project, get_vertex_location(), get_http_timeout_ms()), "vertex"
 
 
 def decode_base64_png(value: str) -> bytes:
@@ -292,13 +344,13 @@ def build_prompt(prompt: str, style_name: str, negative_prompt: str) -> str:
     return text
 
 
-def build_generate_config() -> types.GenerateContentConfig:
-    backend = get_effective_api_backend()
+def build_generate_config(backend: str | None = None) -> types.GenerateContentConfig:
+    resolved_backend = backend or get_effective_api_backend()
     image_config_kwargs = {
         "aspect_ratio": get_aspect_ratio(),
     }
     # Gemini Developer API currently rejects image_size/output_mime_type.
-    if backend != "gemini":
+    if resolved_backend != "gemini":
         image_config_kwargs["image_size"] = get_image_size()
         image_config_kwargs["output_mime_type"] = get_output_mime_type()
 
@@ -401,6 +453,7 @@ async def healthz() -> dict:
         "api_key_profile": get_api_key_profile(),
         "api_key_backend": get_api_key_backend(),
         "effective_api_backend": get_effective_api_backend(),
+        "api_key_pool_size": len(get_google_cloud_api_keys()),
         "vertex_model": get_vertex_model(),
         "model_fallbacks": get_model_fallbacks(),
         "candidate_models": get_candidate_models(),
@@ -416,13 +469,14 @@ async def healthz() -> dict:
 @app.post("/v1/generate-grid", response_model=GenerateGridResponse)
 def generate_grid(payload: GenerateGridRequest) -> GenerateGridResponse:
     try:
-        client = get_client()
+        client, backend = get_client()
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     grid_png = decode_base64_png(payload.grid_png_base64)
     models = get_candidate_models(payload.model)
     prompt_text = build_prompt(payload.prompt, payload.style_name, payload.negative_prompt)
+    generate_config = build_generate_config(backend)
     last_error: Exception | None = None
     saw_rate_limit = False
     for model_name in models:
@@ -439,7 +493,7 @@ def generate_grid(payload: GenerateGridRequest) -> GenerateGridResponse:
                         ],
                     )
                 ],
-                config=build_generate_config(),
+                config=generate_config,
             )
             image_bytes, mime_type = extract_image_bytes_from_response(response)
             latency_ms = int((time.perf_counter() - start) * 1000)
