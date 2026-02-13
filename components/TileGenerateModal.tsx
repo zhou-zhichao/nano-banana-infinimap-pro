@@ -1,12 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { Check, Play, Settings, X as Close, RotateCcw, Wand2 } from "lucide-react";
-import { z } from "zod";
 import {
   DEFAULT_MODEL_VARIANT,
   MODEL_VARIANT_LABELS,
@@ -20,18 +19,16 @@ interface TileGenerateModalProps {
   x: number;
   y: number;
   z: number;
+  timelineIndex: number;
   onUpdate: () => void;
 }
 
 const TILE_SIZE = 256;
-const GRID_SIZE = 3;
-
-export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGenerateModalProps) {
+export function TileGenerateModal({ open, onClose, x, y, z, timelineIndex, onUpdate }: TileGenerateModalProps) {
   const [tiles, setTiles] = useState<string[][]>([]);
   const [prompt, setPrompt] = useState("");
   const [modelVariant, setModelVariant] = useState<ModelVariant>(DEFAULT_MODEL_VARIANT);
   const [loading, setLoading] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [blendPreview, setBlendPreview] = useState<boolean>(false);
   const [offsetX, setOffsetX] = useState<number>(0);
@@ -47,6 +44,10 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
   // Nudge (drift correction) controls are optional and off by default
   const [nudgeOpen, setNudgeOpen] = useState<boolean>(false);
   const [nudgeApplied, setNudgeApplied] = useState<boolean>(false);
+  const withTimelineQuery = useCallback(
+    (url: string) => `${url}${url.includes("?") ? "&" : "?"}t=${timelineIndex}`,
+    [timelineIndex],
+  );
 
   // Load the 3x3 grid of tiles with selective cache busting
   useEffect(() => {
@@ -64,7 +65,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
           const tileX = x + dx;
           const tileY = y + dy;
           metadataPromises.push(
-            fetch(`/api/meta/${z}/${tileX}/${tileY}`)
+            fetch(withTimelineQuery(`/api/meta/${z}/${tileX}/${tileY}`))
               .then(r => r.json())
               .then(data => ({ x: tileX, y: tileY, ...data }))
           );
@@ -90,7 +91,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
           const cacheBuster = tileMeta?.updatedAt 
             ? new Date(tileMeta.updatedAt).getTime() 
             : Date.now();
-          const url = `/api/tiles/${z}/${tileX}/${tileY}?v=${cacheBuster}`;
+          const url = withTimelineQuery(`/api/tiles/${z}/${tileX}/${tileY}?v=${cacheBuster}`);
           row.push(url);
         }
         newTiles.push(row);
@@ -104,7 +105,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
     };
     
     loadTiles();
-  }, [open, x, y, z]);
+  }, [open, x, y, z, timelineIndex, withTimelineQuery]);
 
   // Extract 9 tiles from a composite image
   const extractTilesFromComposite = async (compositeUrl: string): Promise<string[][]> => {
@@ -157,9 +158,9 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
   const loadPreviewTiles = async (id: string, blended: boolean, txOverride?: number, tyOverride?: number) => {
     const tx = (txOverride != null ? Math.round(txOverride) : Math.round(offsetX)) || 0;
     const ty = (tyOverride != null ? Math.round(tyOverride) : Math.round(offsetY)) || 0;
-    const qp = blended ? `?mode=blended&tx=${tx}&ty=${ty}` : '';
-    const url = `/api/preview/${id}${qp}`;
-    setPreviewUrl(url);
+    const qp = blended ? `mode=blended&tx=${tx}&ty=${ty}` : "";
+    const basePreviewUrl = `/api/preview/${id}${qp ? `?${qp}` : ""}`;
+    const url = withTimelineQuery(basePreviewUrl);
     const extractedTiles = await extractTilesFromComposite(url);
     setPreviewTiles(extractedTiles);
     // Initialize default selection on first load: select all tiles by default
@@ -189,13 +190,12 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
     try {
       setDriftLoading(true);
       // Ensure we have raw generated tiles
-      const rawUrl = `/api/preview/${id}`; // raw mode
+      const rawUrl = withTimelineQuery(`/api/preview/${id}`); // raw mode
       const rawTiles = await extractTilesFromComposite(rawUrl);
       if (!tiles || !rawTiles) return;
 
       // Choose only selected positions that already exist
       const pairs: { ex: string; gen: string }[] = [];
-      const positionsUsed: string[] = [];
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           const tileX = x + dx;
@@ -208,7 +208,6 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
           const gen = rawTiles[dy + 1]?.[dx + 1];
           if (ex && gen) {
             pairs.push({ ex, gen });
-            positionsUsed.push(key);
           }
         }
       }
@@ -258,7 +257,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
     setError(null);
     
     try {
-      const response = await fetch(`/api/edit-tile/${z}/${x}/${y}`, {
+      const response = await fetch(withTimelineQuery(`/api/edit-tile/${z}/${x}/${y}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, modelVariant }),
@@ -284,11 +283,11 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
     setLoading(true);
     
     try {
-      const response = await fetch(`/api/confirm-edit/${z}/${x}/${y}`, {
+      const response = await fetch(withTimelineQuery(`/api/confirm-edit/${z}/${x}/${y}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          previewUrl: `/api/preview/${previewId}`,
+          previewUrl: withTimelineQuery(`/api/preview/${previewId}`),
           selectedPositions: Array.from(selectedPositions).map(s => { const [sx,sy] = s.split(',').map(Number); return { x: sx, y: sy }; }),
           offsetX: nudgeApplied ? Math.round(offsetX) : undefined,
           offsetY: nudgeApplied ? Math.round(offsetY) : undefined,
@@ -311,7 +310,7 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/edit-tile/${z}/${x}/${y}`, {
+      const response = await fetch(withTimelineQuery(`/api/edit-tile/${z}/${x}/${y}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, modelVariant }),
@@ -334,7 +333,6 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
   const handleReset = () => {
     setPrompt("");
     setModelVariant(DEFAULT_MODEL_VARIANT);
-    setPreviewUrl(null);
     setPreviewId(null);
     setPreviewTiles(null);
     setError(null);
@@ -349,6 +347,19 @@ export function TileGenerateModal({ open, onClose, x, y, z, onUpdate }: TileGene
     handleReset();
     onClose();
   };
+
+  useEffect(() => {
+    if (!open) return;
+    setPreviewId(null);
+    setPreviewTiles(null);
+    setError(null);
+    setOffsetX(0);
+    setOffsetY(0);
+    setDriftPeak(null);
+    setNudgeOpen(false);
+    setNudgeApplied(false);
+    setSelectedPositions(new Set());
+  }, [open, timelineIndex]);
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>

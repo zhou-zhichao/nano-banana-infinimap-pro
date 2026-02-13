@@ -1,23 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { readTileFile } from "@/lib/storage";
 import { blake2sHex } from "@/lib/hashing";
+import { resolveTimelineContextFromRequest } from "@/lib/timeline/context";
+import { resolveEffectiveTileBuffer } from "@/lib/timeline/storage";
 
 const DEFAULT_PATH = process.env.DEFAULT_TILE_PATH ?? "./public/default-tile.webp";
 
-export async function GET(_req: NextRequest, { params }:{params:Promise<{z:string,x:string,y:string}>}) {
+export async function GET(req: NextRequest, { params }:{params:Promise<{z:string,x:string,y:string}>}) {
   const { z: zStr, x: xStr, y: yStr } = await params;
   const z = Number(zStr), x = Number(xStr), y = Number(yStr);
-  
-  console.log(`Tile z:${z} x:${x} y:${y} requested`);
-  
-  let body = await readTileFile(z,x,y);
+
+  const timeline = await resolveTimelineContextFromRequest(req);
+  let body = await resolveEffectiveTileBuffer(timeline, z, x, y);
   if (!body) {
-    console.log(`Tile z:${z} x:${x} y:${y} does not exist yet, serving default tile.`);
     body = await fs.readFile(path.resolve(DEFAULT_PATH));
-  } else {
-    console.log(`Tile z:${z} x:${x} y:${y} found, buffer size: ${body.length} bytes`);
   }
 
   const etag = `"${blake2sHex(body).slice(0,16)}"`;

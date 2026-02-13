@@ -6,6 +6,7 @@ export interface TileGenerationJobPayload {
   y: number;
   prompt: string;
   modelVariant?: ModelVariant;
+  timelineNodeId?: string;
 }
 
 export interface Queue {

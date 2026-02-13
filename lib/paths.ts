@@ -4,3 +4,4 @@ export const TILE_DIR = path.join(ROOT, ".tiles");         // images
 export const META_DIR = path.join(ROOT, ".meta");           // json per tile
 export const LOCK_DIR = path.join(ROOT, ".locks");          // lock files
 export const QUEUE_DIR = path.join(ROOT, ".queue");         // queue state
+export const TIMELINE_DIR = path.join(ROOT, ".timeline");   // timeline overlays

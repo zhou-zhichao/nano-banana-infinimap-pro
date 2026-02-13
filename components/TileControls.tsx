@@ -8,6 +8,7 @@ interface TileControlsProps {
   x: number;
   y: number;
   z: number;
+  timelineIndex: number;
   exists: boolean;
   onGenerate: (prompt: string) => Promise<void>;
   onRegenerate: (prompt: string) => Promise<void>;
@@ -15,7 +16,7 @@ interface TileControlsProps {
   onRefreshTiles?: () => void;
 }
 
-export default function TileControls({ x, y, z, exists, onGenerate, onRegenerate, onDelete, onRefreshTiles }: TileControlsProps) {
+export default function TileControls({ x, y, z, timelineIndex, exists, onGenerate, onRegenerate, onDelete, onRefreshTiles }: TileControlsProps) {
   const [generateModalOpen, setGenerateModalOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -135,6 +136,7 @@ export default function TileControls({ x, y, z, exists, onGenerate, onRegenerate
         x={x}
         y={y}
         z={z}
+        timelineIndex={timelineIndex}
         onUpdate={() => {
           if (onRefreshTiles) {
             onRefreshTiles();

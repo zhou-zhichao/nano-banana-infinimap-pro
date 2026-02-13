@@ -24,6 +24,7 @@ export type EstimateGridDriftParams = {
   maxShiftPx?: number;
   minPeakSingle?: number;
   minPeakMulti?: number;
+  readTile?: (z: number, x: number, y: number) => Promise<Buffer | null>;
 };
 
 const DEFAULT_MAX_SHIFT_PX = 64;
@@ -223,6 +224,7 @@ export async function estimateGridDriftFromExistingTiles(
     maxShiftPx = DEFAULT_MAX_SHIFT_PX,
     minPeakSingle = DEFAULT_MIN_PEAK_SINGLE,
     minPeakMulti = DEFAULT_MIN_PEAK_MULTI,
+    readTile = (tileZ, tileX, tileY) => readTileFile(tileZ, tileX, tileY),
   } = params;
 
   const candidates: { tx: number; ty: number; peakValue: number }[] = [];
@@ -234,7 +236,7 @@ export async function estimateGridDriftFromExistingTiles(
       const key = `${tileX},${tileY}`;
       if (selectedSet && !selectedSet.has(key)) continue;
 
-      const existingTile = await readTileFile(z, tileX, tileY);
+      const existingTile = await readTile(z, tileX, tileY);
       if (!existingTile) continue;
 
       const rawTile = await sharp(rawComposite)
