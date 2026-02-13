@@ -20,7 +20,7 @@ load_dotenv()
 logging.basicConfig(level=os.environ.get("PY_IMAGE_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("py-image-service")
 
-PROMPT_INSTRUCTION = "complete image. do not modify existing art's position or content."
+PROMPT_INSTRUCTION = ""
 DEFAULT_LOCATION = "us-central1"
 DEFAULT_MODEL = "gemini-2.5-flash-image"
 DEFAULT_STREAM_TIMEOUT_MS = 90_000

@@ -129,6 +129,19 @@ Data layout:
 
 On first bootstrap, legacy `.tiles` is migrated into moon preset tiles using `z_y_x -> z_x_y` conversion, then `default` is created from that preset.
 
+## Precompute Parent Tiles (Manual)
+
+Use this command to generate all parent zoom levels (`z=0..ZMAX-1`) for one tilemap from existing child tiles:
+
+```bash
+corepack yarn regen:parents [mapId]
+```
+
+- If `mapId` is omitted, it defaults to `default`.
+- Example: `corepack yarn regen:parents default`
+- This is a manual operation; it is not run automatically on app startup or map creation.
+- If the map does not exist, the command exits with an error (for example: `Tilemap "..." not found`).
+
 ## Public Internet Access + Password
 
 1. Set password protection in `.env.local`:
