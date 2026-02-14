@@ -288,9 +288,9 @@ def process_task(task: TileTask, args: argparse.Namespace, limiter: RateLimiter,
 
 
 def run_parent_regen(repo_root: Path) -> int:
-    print("Running parent tile generation: node scripts/regen-parents.cjs")
+    print("Running parent tile generation for moon preset: node scripts/regen-parents.cjs preset:moon")
     proc = subprocess.run(
-        ["node", "scripts/regen-parents.cjs"],
+        ["node", "scripts/regen-parents.cjs", "preset:moon"],
         cwd=str(repo_root),
         check=False,
     )
