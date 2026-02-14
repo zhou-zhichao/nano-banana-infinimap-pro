@@ -1,20 +1,20 @@
 /* Regenerate all parent tiles from existing max-zoom tiles.
- * Usage: yarn regen:parents [mapId]
+ * Usage: yarn regen:parents [mapId|preset:moon]
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ZMAX } from "../lib/coords";
-import { generateAllParentTiles } from "../lib/parentTiles";
+import { generateAllParentTiles, generateMoonPresetParentTiles } from "../lib/parentTiles";
 import { ensureTilemapsBootstrap } from "../lib/tilemaps/bootstrap";
 import { DEFAULT_MAP_ID } from "../lib/tilemaps/constants";
-import { mapTilesDir } from "../lib/tilemaps/paths";
+import { mapTilesDir, TILEMAPS_PRESET_MOON_TILES_DIR } from "../lib/tilemaps/paths";
 import { getTilemapManifest } from "../lib/tilemaps/service";
 
-const mapId = process.argv[2] || process.env.TILEMAP_ID || DEFAULT_MAP_ID;
+const target = process.argv[2] || process.env.TILEMAP_ID || DEFAULT_MAP_ID;
+const isMoonPresetTarget = target === "preset:moon";
 
-async function backupParentTiles() {
-  const tileDir = mapTilesDir(mapId);
+async function backupParentTiles(tileDir: string) {
   await fs.mkdir(tileDir, { recursive: true });
 
   const ts = new Date();
@@ -49,14 +49,22 @@ async function main() {
   const started = Date.now();
   try {
     await ensureTilemapsBootstrap();
-    const manifest = await getTilemapManifest(mapId);
-    if (!manifest) {
-      throw new Error(`Tilemap "${mapId}" not found`);
+    if (isMoonPresetTarget) {
+      await backupParentTiles(TILEMAPS_PRESET_MOON_TILES_DIR);
+      await generateMoonPresetParentTiles();
+      const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+      console.log(`Parent regeneration complete for moon preset in ${elapsed}s`);
+      return;
     }
-    await backupParentTiles();
-    await generateAllParentTiles(mapId);
+
+    const manifest = await getTilemapManifest(target);
+    if (!manifest) {
+      throw new Error(`Tilemap "${target}" not found`);
+    }
+    await backupParentTiles(mapTilesDir(target));
+    await generateAllParentTiles(target);
     const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-    console.log(`Parent regeneration complete for "${mapId}" in ${elapsed}s`);
+    console.log(`Parent regeneration complete for "${target}" in ${elapsed}s`);
   } catch (err) {
     console.error("Failed to regenerate parent tiles:", err);
     process.exitCode = 1;

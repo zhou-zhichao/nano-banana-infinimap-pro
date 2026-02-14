@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
-import { db } from "@/lib/adapters/db.file";
-import { withFileLock } from "@/lib/adapters/lock.file";
+import { db } from "../adapters/db.file";
+import { withFileLock } from "../adapters/lock.file";
 import {
   mapTimelineNodeMetaPath,
   mapTimelineNodeMetaDir,
   mapTimelineNodeTilePath,
   mapTimelineNodeTilesDir,
-} from "@/lib/tilemaps/paths";
-import { readTileFile } from "@/lib/storage";
+} from "../tilemaps/paths";
+import { readTileFile } from "../storage";
 import { TimelineContext, TimelineManifest, TimelineTileMeta, TimelineTileStatus } from "./types";
 
 function nowIso() {
