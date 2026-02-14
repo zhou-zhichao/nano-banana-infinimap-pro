@@ -5,5 +5,3 @@ export const DEFAULT_MAP_NAME = "Default";
 export const MOON_WIDTH = 61;
 export const MOON_HEIGHT = 41;
 export const MOON_NAME = "Moon";
-
-export const BOOTSTRAP_VERSION = 1;

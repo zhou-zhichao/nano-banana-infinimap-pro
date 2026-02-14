@@ -122,7 +122,7 @@ This project now binds Next.js to `0.0.0.0` by default for `dev` and `start` (ov
 
 Data layout:
 
-- `.tilemaps/presets/moon/tiles/` -> moon preset source tiles
+- `.tilemaps/presets/moon/tiles/` -> moon preset tiles (tracked in Git LFS, includes precomputed parent levels)
 - `.tilemaps/maps/<mapId>/map.json` -> tilemap manifest
 - `.tilemaps/maps/<mapId>/tiles/` -> tile images
 - `.tilemaps/maps/<mapId>/meta/` -> tile metadata JSON
@@ -132,23 +132,25 @@ Data layout:
 - `.tilemaps/maps/<mapId>/locks/` -> lock files
 - `.tilemaps/maps/<mapId>/queue/` -> queue files
 
-On first bootstrap, legacy `.tiles` is migrated into moon preset tiles using `z_y_x -> z_x_y` conversion, then `default` is created from that preset.
-If legacy `.timeline/` exists, it is migrated to `default` map timeline storage.
+On bootstrap, the app ensures v1 tilemap directories, then creates `default` only if it does not exist by copying `.tilemaps/presets/moon/tiles`.
+Existing `default` data is not overwritten on later startups.
 
 All timeline-aware APIs (`/api/timeline`, `/api/meta/:z/:x/:y`, `/api/tiles/:z/:x/:y`, `/api/claim`, `/api/invalidate`, `/api/edit-tile`, `/api/confirm-edit`) resolve state using both `mapId` and `t`.
 
 ## Precompute Parent Tiles (Manual)
 
-Use this command to generate all parent zoom levels (`z=0..ZMAX-1`) for one tilemap from existing child tiles:
+Use this command to generate all parent zoom levels (`z=0..ZMAX-1`) from existing child tiles:
 
 ```bash
-corepack yarn regen:parents [mapId]
+corepack yarn regen:parents [mapId|preset:moon]
 ```
 
-- If `mapId` is omitted, it defaults to `default`.
-- Example: `corepack yarn regen:parents default`
+- If omitted, target defaults to `default` map.
+- Example (map): `corepack yarn regen:parents default`
+- Example (moon preset): `corepack yarn regen:parents preset:moon`
+- Use this after changing leaf/source tiles when you want refreshed parent levels.
 - This is a manual operation; it is not run automatically on app startup or map creation.
-- If the map does not exist, the command exits with an error (for example: `Tilemap "..." not found`).
+- If a map target does not exist, the command exits with an error (for example: `Tilemap "..." not found`).
 
 ## Public Internet Access + Password
 
@@ -228,7 +230,7 @@ Default behavior:
 - Uses `window-zero` mapping (`dstX=srcX-100`, `dstY=srcY-300`)
 - Uses moderate rate settings (`concurrency=4`, request spacing + jitter, retries on `429/5xx`)
 - Does not write tile metadata records
-- Runs parent regeneration (`scripts/regen-parents.cjs`) when new tiles were downloaded
+- Runs parent regeneration for moon preset (`scripts/regen-parents.cjs preset:moon`) when new tiles were downloaded
 
 Run with defaults:
 

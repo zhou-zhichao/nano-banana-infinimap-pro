@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { withFileLock } from "@/lib/adapters/lock.file";
-import { LEGACY_TIMELINE_DIR } from "@/lib/paths";
-import { DEFAULT_MAP_ID } from "@/lib/tilemaps/constants";
 import {
   mapTimelineDir,
   mapTimelineManifestPath,
@@ -46,15 +43,6 @@ function createDefaultManifest(): TimelineManifest {
   };
 }
 
-async function pathExists(targetPath: string) {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function ensureTimelineRoot(mapId: string) {
   await fs.mkdir(mapTimelineDir(mapId), { recursive: true }).catch(() => {});
   await fs.mkdir(mapTimelineNodesDir(mapId), { recursive: true }).catch(() => {});
@@ -83,31 +71,8 @@ async function removeNodeDirectories(mapId: string, nodeId: string) {
   await fs.rm(mapTimelineNodeDir(mapId, nodeId), { recursive: true, force: true }).catch(() => {});
 }
 
-async function migrateLegacyTimelineToDefaultIfNeeded(mapId: string) {
-  if (mapId !== DEFAULT_MAP_ID) return;
-  if (!(await pathExists(LEGACY_TIMELINE_DIR))) return;
-  if (await pathExists(mapTimelineManifestPath(mapId))) return;
-
-  const legacyManifestPath = path.join(LEGACY_TIMELINE_DIR, "manifest.json");
-  if (!(await pathExists(legacyManifestPath))) return;
-
-  const raw = await fs.readFile(legacyManifestPath, "utf-8").catch(() => null);
-  if (!raw) return;
-  const parsed = JSON.parse(raw) as unknown;
-  if (!isValidManifest(parsed)) return;
-
-  await ensureTimelineRoot(mapId);
-  await fs.writeFile(mapTimelineManifestPath(mapId), JSON.stringify(parsed, null, 2));
-
-  const legacyNodesDir = path.join(LEGACY_TIMELINE_DIR, "nodes");
-  if (await pathExists(legacyNodesDir)) {
-    await fs.cp(legacyNodesDir, mapTimelineNodesDir(mapId), { recursive: true }).catch(() => {});
-  }
-}
-
 async function ensureManifestUnlocked(mapId: string): Promise<TimelineManifest> {
   await ensureTimelineRoot(mapId);
-  await migrateLegacyTimelineToDefaultIfNeeded(mapId);
 
   const existing = await readManifestFile(mapId);
   if (existing) {
