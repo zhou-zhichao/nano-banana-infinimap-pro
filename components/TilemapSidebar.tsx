@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TilemapManifest, TilemapTemplate } from "@/lib/tilemaps/types";
+import { formatCounter, toPercent, type RateLimitStatusResponse } from "@/lib/rateLimitStatus";
 
 type Props = {
   tilemaps: TilemapManifest[];
@@ -22,8 +23,52 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
   const [height, setHeight] = useState(DEFAULT_BLANK_HEIGHT);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rateLimit, setRateLimit] = useState<RateLimitStatusResponse | null>(null);
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null);
 
   const items = useMemo(() => tilemaps, [tilemaps]);
+  const modelEntries = useMemo(
+    () =>
+      rateLimit
+        ? [
+            { key: "nano_banana" as const, data: rateLimit.models.nano_banana },
+            { key: "nano_banana_pro" as const, data: rateLimit.models.nano_banana_pro },
+          ]
+        : [],
+    [rateLimit],
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const fallbackPollMs = 5_000;
+
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/rate-limit-status", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || "Failed to load rate limit status");
+        }
+        if (disposed) return;
+        setRateLimit(data as RateLimitStatusResponse);
+        setRateLimitError(null);
+        const nextMs = Number((data as any)?.poll_ms);
+        const delay = Number.isFinite(nextMs) && nextMs > 0 ? Math.floor(nextMs) : fallbackPollMs;
+        timeout = setTimeout(poll, delay);
+      } catch (err) {
+        if (disposed) return;
+        setRateLimitError(err instanceof Error ? err.message : "Failed to load rate limit status");
+        timeout = setTimeout(poll, fallbackPollMs);
+      }
+    };
+
+    void poll();
+    return () => {
+      disposed = true;
+      if (timeout) clearTimeout(timeout);
+    };
+  }, []);
 
   const resetForm = () => {
     setName("");
@@ -108,6 +153,51 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
         </div>
       ) : (
         <div className="flex-1 overflow-auto p-2">
+          <div className="mb-3 rounded-md border border-gray-200 bg-white p-2">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-xs font-semibold text-gray-800">Gemini Quota</div>
+              <div className="text-[10px] text-gray-500">keys: {rateLimit?.key_pool_size ?? 0}</div>
+            </div>
+            {rateLimitError && <div className="text-[11px] text-red-600">{rateLimitError}</div>}
+            {!rateLimitError && !rateLimit && <div className="text-[11px] text-gray-500">Loading quota...</div>}
+            {!rateLimitError && rateLimit && (
+              <div className="space-y-2">
+                {modelEntries.map(({ key, data }) => (
+                  <div key={key} className="rounded border border-gray-100 bg-gray-50 px-2 py-1.5">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-gray-700">{data.label}</span>
+                      {rateLimit.enabled && data.exhausted && (
+                        <span className="text-[10px] font-medium text-red-600">Rate Limited</span>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      {[
+                        { label: "RPM", stat: data.rpm },
+                        { label: "RPD", stat: data.rpd },
+                      ].map((item) => (
+                        <div key={item.label}>
+                          <div className="mb-0.5 flex items-center justify-between text-[10px] text-gray-600">
+                            <span>{item.label}</span>
+                            <span>{formatCounter(item.stat.used, item.stat.limit)}</span>
+                          </div>
+                          <div className="h-1.5 rounded bg-gray-200">
+                            <div
+                              className={`h-1.5 rounded ${rateLimit.enabled && data.exhausted ? "bg-red-500" : "bg-blue-500"}`}
+                              style={{ width: `${toPercent(item.stat.used, item.stat.limit)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {rateLimit.enabled && data.exhausted && data.retry_after_seconds > 0 && (
+                      <div className="mt-1 text-[10px] text-red-600">Retry in ~{data.retry_after_seconds}s</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {items.map((item) => {
             const active = item.id === activeMapId;
             return (

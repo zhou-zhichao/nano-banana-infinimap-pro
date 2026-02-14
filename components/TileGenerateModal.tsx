@@ -13,6 +13,7 @@ import {
   MODEL_VARIANTS,
   type ModelVariant,
 } from "@/lib/modelVariant";
+import { bucketForModelVariant, type RateLimitStatusResponse } from "@/lib/rateLimitStatus";
 
 interface TileGenerateModalProps {
   mapId: string;
@@ -46,6 +47,8 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
   const [newTilePositions, setNewTilePositions] = useState<Set<string>>(new Set());
   const [selectedPositions, setSelectedPositions] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<string>("preview");
+  const [rateLimit, setRateLimit] = useState<RateLimitStatusResponse | null>(null);
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null);
   // Nudge (drift correction) controls are optional and off by default
   const [nudgeOpen, setNudgeOpen] = useState<boolean>(false);
   const [nudgeApplied, setNudgeApplied] = useState<boolean>(false);
@@ -55,6 +58,42 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
       `${url}${url.includes("?") ? "&" : "?"}mapId=${encodeURIComponent(mapId)}&t=${encodeURIComponent(String(timeline))}`,
     [mapId, timelineIndex],
   );
+  const activeBucket = bucketForModelVariant(modelVariant);
+  const activeModelRate = rateLimit?.models?.[activeBucket];
+  const activeModelExhausted = Boolean(rateLimit?.enabled && activeModelRate?.exhausted);
+
+  useEffect(() => {
+    if (!open) return;
+    let disposed = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const fallbackPollMs = 5_000;
+
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/rate-limit-status", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || "Failed to load rate limit status");
+        }
+        if (disposed) return;
+        setRateLimit(data as RateLimitStatusResponse);
+        setRateLimitError(null);
+        const nextMs = Number((data as any)?.poll_ms);
+        const delay = Number.isFinite(nextMs) && nextMs > 0 ? Math.floor(nextMs) : fallbackPollMs;
+        timeout = setTimeout(poll, delay);
+      } catch (err) {
+        if (disposed) return;
+        setRateLimitError(err instanceof Error ? err.message : "Failed to load rate limit status");
+        timeout = setTimeout(poll, fallbackPollMs);
+      }
+    };
+
+    void poll();
+    return () => {
+      disposed = true;
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [open]);
 
   // Load the 3x3 grid of tiles with selective cache busting
   useEffect(() => {
@@ -268,6 +307,15 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
 
   const handleEdit = async () => {
     if (!prompt.trim()) return;
+    if (activeModelExhausted) {
+      const retry = activeModelRate?.retry_after_seconds ?? 0;
+      setError(
+        retry > 0
+          ? `${activeModelRate?.label ?? "Selected model"} rate limit reached. Retry in about ${retry}s.`
+          : `${activeModelRate?.label ?? "Selected model"} rate limit reached.`,
+      );
+      return;
+    }
     
     setLoading(true);
     setError(null);
@@ -279,8 +327,10 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
         body: JSON.stringify({ prompt, modelVariant }),
       });
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to edit tile");
+        const data = await response.json().catch(() => ({}));
+        const retryAfter = response.headers.get("retry-after");
+        const baseMessage = data?.error || "Failed to edit tile";
+        throw new Error(retryAfter ? `${baseMessage} (retry in ${retryAfter}s)` : baseMessage);
       }
       const data = await response.json();
       setPreviewId(data.previewId);
@@ -323,6 +373,15 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
 
   const handleRetry = async () => {
     if (!prompt.trim()) return;
+    if (activeModelExhausted) {
+      const retry = activeModelRate?.retry_after_seconds ?? 0;
+      setError(
+        retry > 0
+          ? `${activeModelRate?.label ?? "Selected model"} rate limit reached. Retry in about ${retry}s.`
+          : `${activeModelRate?.label ?? "Selected model"} rate limit reached.`,
+      );
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -332,8 +391,10 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
         body: JSON.stringify({ prompt, modelVariant }),
       });
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to regenerate preview");
+        const data = await response.json().catch(() => ({}));
+        const retryAfter = response.headers.get("retry-after");
+        const baseMessage = data?.error || "Failed to regenerate preview";
+        throw new Error(retryAfter ? `${baseMessage} (retry in ${retryAfter}s)` : baseMessage);
       }
       const data = await response.json();
       setPreviewId(data.previewId);
@@ -353,6 +414,7 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
     setPreviewId(null);
     setPreviewTiles(null);
     setError(null);
+    setRateLimitError(null);
     setOffsetX(0);
     setOffsetY(0);
     setDriftPeak(null);
@@ -404,17 +466,25 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                   <div className="inline-flex rounded-lg border bg-gray-50 p-0.5">
                     {MODEL_VARIANTS.map((variant) => {
                       const active = modelVariant === variant;
+                      const variantBucket = bucketForModelVariant(variant);
+                      const variantStatus = rateLimit?.models?.[variantBucket];
+                      const variantLimited = Boolean(rateLimit?.enabled && variantStatus?.exhausted);
                       return (
                         <button
                           key={variant}
                           type="button"
                           onClick={() => setModelVariant(variant)}
-                          disabled={loading}
+                          disabled={loading || variantLimited}
                           className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                             active
                               ? "bg-blue-600 text-white"
                               : "text-gray-600 hover:bg-gray-100"
                           } disabled:opacity-50`}
+                          title={
+                            variantLimited
+                              ? `${variantStatus?.label ?? MODEL_VARIANT_LABELS[variant]} rate limited`
+                              : undefined
+                          }
                         >
                           {MODEL_VARIANT_LABELS[variant]}
                         </button>
@@ -437,13 +507,31 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                       type="button"
                       aria-label="Generate"
                       onClick={() => (previewTiles ? handleRetry() : handleEdit())}
-                      disabled={loading || !prompt.trim()}
+                      disabled={loading || !prompt.trim() || activeModelExhausted}
                       className="h-7 w-7 rounded-full inline-flex items-center justify-center bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed focus:outline-auto"
+                      title={
+                        activeModelExhausted
+                          ? `${activeModelRate?.label ?? "Selected model"} rate limit reached`
+                          : undefined
+                      }
                     >
                       <Play className="h-3.5 w-3.5 text-white" />
                     </button>
                   </div>
                 </div>
+                {activeModelExhausted && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                    {activeModelRate?.label ?? "Selected model"} 已达速率上限
+                    {activeModelRate?.retry_after_seconds
+                      ? `，约 ${activeModelRate.retry_after_seconds}s 后可重试。`
+                      : "，请稍后重试。"}
+                  </div>
+                )}
+                {rateLimitError && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                    Quota status unavailable: {rateLimitError}
+                  </div>
+                )}
                 {error && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-md text-red-600 text-sm">
                     {error}

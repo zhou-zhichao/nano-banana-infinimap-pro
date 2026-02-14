@@ -3,6 +3,7 @@ import { z as zod } from "zod";
 import { ZMAX } from "@/lib/coords";
 import { fileQueue } from "@/lib/adapters/queue.file";
 import { DEFAULT_MODEL_VARIANT, MODEL_VARIANTS } from "@/lib/modelVariant";
+import { PythonImageServiceError } from "@/lib/pythonImageService";
 import { isTileInBounds } from "@/lib/tilemaps/bounds";
 import { MapContextError, resolveMapContext } from "@/lib/tilemaps/context";
 import { parseTimelineIndexFromRequest, resolveTimelineContext } from "@/lib/timeline/context";
@@ -53,16 +54,32 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ z: 
     return NextResponse.json({ ok: true, status: "ALREADY_PENDING", timelineIndex: timeline.index });
   }
 
-  await markTimelineTilePending(mapId, timeline.node.id, z, x, y);
-  await fileQueue.enqueue(`regen-${timeline.node.id}-${z}-${x}-${y}`, {
-    mapId,
-    z,
-    x,
-    y,
-    prompt,
-    modelVariant,
-    timelineNodeId: timeline.node.id,
-  });
-
-  return NextResponse.json({ ok: true, timelineIndex: timeline.index });
+  try {
+    await markTimelineTilePending(mapId, timeline.node.id, z, x, y);
+    await fileQueue.enqueue(`regen-${timeline.node.id}-${z}-${x}-${y}`, {
+      mapId,
+      z,
+      x,
+      y,
+      prompt,
+      modelVariant,
+      timelineNodeId: timeline.node.id,
+    });
+    return NextResponse.json({ ok: true, timelineIndex: timeline.index });
+  } catch (error) {
+    const headers: Record<string, string> = {};
+    if (error instanceof PythonImageServiceError && error.statusCode) {
+      if (error.retryAfterSeconds && error.retryAfterSeconds > 0) {
+        headers["Retry-After"] = String(error.retryAfterSeconds);
+      }
+      return NextResponse.json(
+        { error: error.message || "Regeneration rate-limited" },
+        { status: error.statusCode, headers },
+      );
+    }
+    return NextResponse.json(
+      { error: "Failed to regenerate tile", details: error instanceof Error ? error.message : "Unknown error" },
+      { status: 500 },
+    );
+  }
 }

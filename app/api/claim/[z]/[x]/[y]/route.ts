@@ -3,6 +3,7 @@ import { z as zod } from "zod";
 import { fileQueue } from "@/lib/adapters/queue.file";
 import { ZMAX } from "@/lib/coords";
 import { DEFAULT_MODEL_VARIANT, MODEL_VARIANTS } from "@/lib/modelVariant";
+import { PythonImageServiceError } from "@/lib/pythonImageService";
 import { isTileInBounds } from "@/lib/tilemaps/bounds";
 import { MapContextError, resolveMapContext } from "@/lib/tilemaps/context";
 import { parseTimelineIndexFromRequest, resolveTimelineContext } from "@/lib/timeline/context";
@@ -68,6 +69,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ z: 
     });
     return NextResponse.json({ ok: true, status: "ENQUEUED", timelineIndex: timeline.index });
   } catch (error) {
+    const headers: Record<string, string> = {};
+    if (error instanceof PythonImageServiceError && error.statusCode) {
+      if (error.retryAfterSeconds && error.retryAfterSeconds > 0) {
+        headers["Retry-After"] = String(error.retryAfterSeconds);
+      }
+      return NextResponse.json(
+        { error: error.message || "Generation rate-limited" },
+        { status: error.statusCode, headers },
+      );
+    }
     return NextResponse.json(
       { error: "Failed to start generation", details: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 },

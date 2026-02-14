@@ -59,6 +59,10 @@ GOOGLE_API_KEY_PROFILE="gemini" # or "aistudio"
 GOOGLE_CLOUD_API_KEY_BACKEND="auto" # auto | gemini | vertex
 GOOGLE_CLOUD_API_KEY_GEMINI="your-gemini-key-1,your-gemini-key-2,your-gemini-key-3" # round-robin by request
 GOOGLE_CLOUD_API_KEY_AISTUDIO="your-aistudio-key"
+GEMINI_RATE_LIMIT_ENABLED="1"
+GEMINI_RATE_LIMIT_STATE_PATH=".temp/gemini-rate-limit-state.json"
+GEMINI_RATE_LIMIT_DEFAULTS_JSON='{"nano_banana":{"rpm":500,"rpd":2000},"nano_banana_pro":{"rpm":20,"rpd":250}}'
+GEMINI_RATE_LIMIT_POLL_MS="5000"
 ```
 
 6. Edit `.env.local` if needed:
@@ -89,6 +93,10 @@ GOOGLE_CLOUD_API_KEY_BACKEND="auto"
 GOOGLE_CLOUD_API_KEY_GEMINI="" # single key or comma-separated key pool
 GOOGLE_CLOUD_API_KEY_AISTUDIO=""
 GOOGLE_CLOUD_API_KEY=""
+GEMINI_RATE_LIMIT_ENABLED="1"
+GEMINI_RATE_LIMIT_STATE_PATH=".temp/gemini-rate-limit-state.json"
+GEMINI_RATE_LIMIT_DEFAULTS_JSON='{"nano_banana":{"rpm":500,"rpd":2000},"nano_banana_pro":{"rpm":20,"rpd":250}}'
+GEMINI_RATE_LIMIT_POLL_MS="5000"
 ALLOW_STUB_FALLBACK="0"
 ```
 
@@ -187,6 +195,12 @@ Check Python service:
 curl http://127.0.0.1:8001/healthz
 ```
 
+Check local Gemini key pool quota status:
+
+```bash
+curl http://127.0.0.1:8001/v1/rate-limit-status
+```
+
 Expected result includes:
 
 - `ok: true`
@@ -203,6 +217,11 @@ Expected result includes:
 - `image_size`
 - `http_timeout_ms`
 - `stream_timeout_ms`
+- `gemini_rate_limit_enabled`
+- `gemini_rate_limit_runtime_enabled`
+- `gemini_rate_limit_state_path`
+- `gemini_rate_limit_defaults`
+- `gemini_rate_limit_poll_ms`
 
 ## Notes
 
@@ -214,6 +233,10 @@ Expected result includes:
 - Defaults are tuned for responsiveness (`IMAGE` only, `1K`, server stream timeout 90s).
 - Stub tile fallback is disabled by default (`ALLOW_STUB_FALLBACK="0"`), so generation errors are visible instead of silent solid-color tiles.
 - Rate limit responses are surfaced as `429` with `Retry-After`, instead of being collapsed into generic `500`.
+- Sidebar (`/map`) shows aggregated `RPM/RPD` for `Nano Banana` and `Nano Banana Pro`.
+- Next.js proxy endpoint `/api/rate-limit-status` reads Python `/v1/rate-limit-status` for frontend polling.
+- Local key-pool limiter persists to disk (`GEMINI_RATE_LIMIT_STATE_PATH`), so counters survive service restarts.
+- Generation UI disables model actions when local limiter reports exhausted quota; backend still enforces hard `429`.
 
 ## Import NASA Moon Background Tiles
 
