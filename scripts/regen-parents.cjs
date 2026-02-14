@@ -28,4 +28,8 @@ require('ts-node').register({
     target: 'es2020'
   }
 });
+require('tsconfig-paths').register({
+  baseUrl: process.cwd(),
+  paths: { '@/*': ['./*'] },
+});
 require('./generate-parents.ts');

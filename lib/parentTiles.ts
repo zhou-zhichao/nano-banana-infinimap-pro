@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import sharp from "sharp";
 import { childrenOf, TILE, ZMAX } from "./coords";
 import { db } from "./adapters/db.file";
@@ -7,6 +5,7 @@ import { blake2sHex, hashTilePayload } from "./hashing";
 import { readTileFile, writeTileFile } from "./storage";
 import { tileGridSizeAtZoom } from "./tilemaps/bounds";
 import { getTilemapManifest } from "./tilemaps/service";
+import { getTransparentTileBuffer } from "./transparentTile";
 import { TimelineContext } from "./timeline/types";
 import {
   markTimelineTileTombstone,
@@ -15,45 +14,39 @@ import {
   writeTimelineTileReady,
 } from "./timeline/storage";
 
-const DEFAULT_PATH = process.env.DEFAULT_TILE_PATH ?? "./public/default-tile.webp";
-
 async function composeParentTile(childBuffers: (Buffer | null)[]) {
-  const defaultTile = await fs.readFile(path.resolve(DEFAULT_PATH));
-  const tiles = childBuffers.map((buf) => buf ?? defaultTile);
+  const transparentTile = await getTransparentTileBuffer(TILE);
+  const tiles = await Promise.all(
+    childBuffers.map(async (buf) => {
+      const input = buf ?? transparentTile;
+      return sharp(input).resize(TILE, TILE, { fit: "fill" }).toBuffer();
+    }),
+  );
 
   try {
-    const topRow = await sharp(tiles[0])
-      .resize(TILE, TILE, { fit: "fill" })
-      .extend({ right: TILE })
+    const fullComposite = await sharp({
+      create: {
+        width: TILE * 2,
+        height: TILE * 2,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
       .composite([
-        {
-          input: await sharp(tiles[1]).resize(TILE, TILE, { fit: "fill" }).toBuffer(),
-          left: TILE,
-          top: 0,
-        },
+        { input: tiles[0], left: 0, top: 0 },
+        { input: tiles[1], left: TILE, top: 0 },
+        { input: tiles[2], left: 0, top: TILE },
+        { input: tiles[3], left: TILE, top: TILE },
       ])
+      .png()
       .toBuffer();
 
-    const bottomRow = await sharp(tiles[2])
-      .resize(TILE, TILE, { fit: "fill" })
-      .extend({ right: TILE })
-      .composite([
-        {
-          input: await sharp(tiles[3]).resize(TILE, TILE, { fit: "fill" }).toBuffer(),
-          left: TILE,
-          top: 0,
-        },
-      ])
+    return await sharp(fullComposite)
+      .resize(TILE, TILE, { kernel: "lanczos3" })
+      .webp({ quality: 85 })
       .toBuffer();
-
-    const fullComposite = await sharp(topRow)
-      .extend({ bottom: TILE })
-      .composite([{ input: bottomRow, left: 0, top: TILE }])
-      .toBuffer();
-
-    return await sharp(fullComposite).resize(TILE, TILE, { kernel: "lanczos3" }).webp({ quality: 85 }).toBuffer();
   } catch {
-    return sharp(defaultTile).resize(TILE, TILE, { fit: "fill" }).webp({ quality: 85 }).toBuffer();
+    return transparentTile;
   }
 }
 

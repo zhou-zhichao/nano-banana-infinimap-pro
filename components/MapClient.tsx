@@ -387,6 +387,8 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
         maxZoom: MAX_Z,
         zoom: initialView.zoom,
       });
+      mapElementRef.current.style.background = "#000";
+      mapInstance.getContainer().style.background = "#000";
       mapRef.current = mapInstance;
 
       const worldWidth = mapWidth * 256;
