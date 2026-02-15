@@ -349,14 +349,19 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
     setLoading(true);
     
     try {
+      const previewMode = blendPreview ? "blended" : "raw";
       const response = await fetch(withMapTimeline(`/api/confirm-edit/${z}/${x}/${y}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           previewUrl: withMapTimeline(`/api/preview/${previewId}`),
-          selectedPositions: Array.from(selectedPositions).map(s => { const [sx,sy] = s.split(',').map(Number); return { x: sx, y: sy }; }),
-          offsetX: nudgeApplied ? Math.round(offsetX) : undefined,
-          offsetY: nudgeApplied ? Math.round(offsetY) : undefined,
+          previewMode,
+          selectedPositions:
+            previewMode === "blended"
+              ? Array.from(selectedPositions).map(s => { const [sx,sy] = s.split(',').map(Number); return { x: sx, y: sy }; })
+              : undefined,
+          offsetX: previewMode === "blended" && nudgeApplied ? Math.round(offsetX) : undefined,
+          offsetY: previewMode === "blended" && nudgeApplied ? Math.round(offsetY) : undefined,
         }),
       });
       if (!response.ok) throw new Error("Failed to confirm edits");
@@ -410,6 +415,7 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
   const handleReset = () => {
     setPrompt("");
     setModelVariant(DEFAULT_MODEL_VARIANT);
+    setBlendPreview(false);
     setPreviewUrl(null);
     setPreviewId(null);
     setPreviewTiles(null);
@@ -574,6 +580,11 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                                 checked={!blendPreview}
                                 onChange={async () => {
                                   setBlendPreview(false);
+                                  setNudgeOpen(false);
+                                  setNudgeApplied(false);
+                                  setOffsetX(0);
+                                  setOffsetY(0);
+                                  setDriftPeak(null);
                                   if (previewId) await loadPreviewTiles(previewId, false);
                                 }}
                               />
@@ -633,14 +644,14 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                               const tileExists = !newTilePositions.has(`${tileX},${tileY}`);
                               const key = `${tileX},${tileY}`;
                               const selected = selectedPositions.has(key);
-                              const willApply = previewTiles ? selected : false;
+                              const willApply = previewTiles ? (blendPreview ? selected : true) : false;
                               const imgSrc = previewTiles ? (willApply ? tileData : tiles[dy][dx]) : tiles[dy][dx];
 
                               return (
                                 <div key={`${dx}-${dy}`} className="relative w-full h-full">
                                   <img src={imgSrc} alt={`Tile ${tileX},${tileY}`} className="block w-full h-full object-cover" />
                                   {/* Hover overlay controls for selection + tags (hover-only) */}
-                                  {previewTiles && (
+                                  {previewTiles && blendPreview && (
                                     <div className="pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150">
                                       <div className="flex items-start justify-between p-1">
                                         {/* Tag pill shows only on hover */}
@@ -688,19 +699,35 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                   {/* Left: status pills */}
                   <div className="flex items-center gap-2 min-w-0">
                     <Tooltip.Provider delayDuration={300}>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <span className="inline-flex items-center gap-1 px-2 h-7 rounded-full bg-gray-100 text-gray-700 text-[11px] font-medium">
-                            {selectedPositions.size}/9
-                          </span>
-                        </Tooltip.Trigger>
-                        <Tooltip.Portal>
-                          <Tooltip.Content sideOffset={6} className="z-[10002] bg-gray-900 text-white px-2 py-1 rounded text-xs">
-                            Selected {selectedPositions.size} of 9 tiles to apply
-                            <Tooltip.Arrow className="fill-gray-900" />
-                          </Tooltip.Content>
-                        </Tooltip.Portal>
-                      </Tooltip.Root>
+                      {blendPreview ? (
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <span className="inline-flex items-center gap-1 px-2 h-7 rounded-full bg-gray-100 text-gray-700 text-[11px] font-medium">
+                              {selectedPositions.size}/9
+                            </span>
+                          </Tooltip.Trigger>
+                          <Tooltip.Portal>
+                            <Tooltip.Content sideOffset={6} className="z-[10002] bg-gray-900 text-white px-2 py-1 rounded text-xs">
+                              Selected {selectedPositions.size} of 9 tiles to apply
+                              <Tooltip.Arrow className="fill-gray-900" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        </Tooltip.Root>
+                      ) : (
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <span className="inline-flex items-center gap-1 px-2 h-7 rounded-full bg-gray-100 text-gray-700 text-[11px] font-medium">
+                              3x3 fixed
+                            </span>
+                          </Tooltip.Trigger>
+                          <Tooltip.Portal>
+                            <Tooltip.Content sideOffset={6} className="z-[10002] bg-gray-900 text-white px-2 py-1 rounded text-xs">
+                              Raw mode applies full 3x3 directly
+                              <Tooltip.Arrow className="fill-gray-900" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        </Tooltip.Root>
+                      )}
 
                       <Tooltip.Root>
                         <Tooltip.Trigger asChild>
@@ -710,13 +737,13 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                         </Tooltip.Trigger>
                         <Tooltip.Portal>
                           <Tooltip.Content sideOffset={6} className="z-[10002] bg-gray-900 text-white px-2 py-1 rounded text-xs">
-                            Preview mode: {blendPreview ? 'Blended (existing tiles fade to edges)' : 'Raw model output'}
+                            Preview mode: {blendPreview ? 'Blended (existing tiles fade to edges)' : 'Raw model output (applies full 3x3 directly)'}
                             <Tooltip.Arrow className="fill-gray-900" />
                           </Tooltip.Content>
                         </Tooltip.Portal>
                       </Tooltip.Root>
 
-                      {typeof driftPeak === 'number' && (
+                      {blendPreview && typeof driftPeak === 'number' && (
                         <span className="text-[11px] text-gray-500">Peak {driftPeak.toFixed(3)}</span>
                       )}
                     </Tooltip.Provider>
@@ -727,30 +754,32 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                   {/* Right: actions */}
                   <div className="ml-auto flex items-center gap-1">
                     {/* Nudge toggle */}
-                    <Tooltip.Provider delayDuration={300}>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <button
-                            className={`h-8 px-2 inline-flex items-center gap-1 rounded-md border hover:bg-gray-50 ${nudgeOpen ? 'bg-gray-50' : ''}`}
-                            onClick={() => {
-                              const next = !nudgeOpen;
-                              setNudgeOpen(next);
-                              if (!next) {
-                                // Reset when closing to ensure no accidental application
-                                setOffsetX(0); setOffsetY(0); setDriftPeak(null); setNudgeApplied(false);
-                              }
-                            }}
-                          >
-                            {/* simple icon via CSS caret */}
-                            <span className={`transition-transform ${nudgeOpen ? 'rotate-90' : ''}`}>{'>'}</span>
-                            <span className="text-[11px]">Nudge</span>
-                          </button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Portal>
-                          <Tooltip.Content sideOffset={6} className="z-[10002] bg-gray-900 text-white px-2 py-1 rounded text-xs">Optional drift correction</Tooltip.Content>
-                        </Tooltip.Portal>
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
+                    {blendPreview && (
+                      <Tooltip.Provider delayDuration={300}>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <button
+                              className={`h-8 px-2 inline-flex items-center gap-1 rounded-md border hover:bg-gray-50 ${nudgeOpen ? 'bg-gray-50' : ''}`}
+                              onClick={() => {
+                                const next = !nudgeOpen;
+                                setNudgeOpen(next);
+                                if (!next) {
+                                  // Reset when closing to ensure no accidental application
+                                  setOffsetX(0); setOffsetY(0); setDriftPeak(null); setNudgeApplied(false);
+                                }
+                              }}
+                            >
+                              {/* simple icon via CSS caret */}
+                              <span className={`transition-transform ${nudgeOpen ? 'rotate-90' : ''}`}>{'>'}</span>
+                              <span className="text-[11px]">Nudge</span>
+                            </button>
+                          </Tooltip.Trigger>
+                          <Tooltip.Portal>
+                            <Tooltip.Content sideOffset={6} className="z-[10002] bg-gray-900 text-white px-2 py-1 rounded text-xs">Optional drift correction</Tooltip.Content>
+                          </Tooltip.Portal>
+                        </Tooltip.Root>
+                      </Tooltip.Provider>
+                    )}
 
                     <Tooltip.Provider delayDuration={300}>
                       <Tooltip.Root>
@@ -787,7 +816,7 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
 
                     <button
                       onClick={handleAccept}
-                      disabled={loading || !previewTiles || selectedPositions.size === 0}
+                      disabled={loading || !previewTiles || (blendPreview && selectedPositions.size === 0)}
                       className="h-8 px-3 rounded-md text-xs bg-green-600 text-white hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                     >
                       <Check className="w-4 h-4" />
@@ -796,7 +825,7 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                   </div>
                 </div>
                 {/* Nudge expandable row */}
-                {nudgeOpen && previewTiles && (
+                {blendPreview && nudgeOpen && previewTiles && (
                   <div className="mt-2 flex items-center gap-2 text-xs">
                     <span className="text-gray-700">Drift correction</span>
                     <div className="flex items-center gap-1">

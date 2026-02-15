@@ -162,6 +162,12 @@ corepack yarn regen:parents [mapId|preset:moon]
 - Missing/out-of-bounds tile fallback is transparent (not gray placeholder), so empty areas show the map container background.
 - If you previously saw parent-level white/gray blocks, run parent regeneration again to rebuild historical parent tiles with transparent fallback.
 
+Realtime parent policy:
+
+- Non-`default` maps: realtime parent regeneration runs for generation and direct tile updates.
+- `default` map: generation APIs (`claim`/`invalidate`) skip realtime parent regeneration to keep preset parent levels.
+- `default` map direct tile updates (`confirm-edit` and `delete`) still regenerate parent levels in realtime.
+
 ## Public Internet Access + Password
 
 1. Set password protection in `.env.local`:

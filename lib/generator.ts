@@ -447,7 +447,7 @@ async function generateParentTilesForChild(
   y: number,
   timelineContext: TimelineContext | null,
 ) {
-  if (!shouldGenerateRealtimeParentTiles(mapId)) {
+  if (!shouldGenerateRealtimeParentTiles(mapId, "generation")) {
     console.log(`  Skipping realtime parent generation for map:${mapId} (using preset parent levels)`);
     return;
   }

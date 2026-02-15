@@ -40,7 +40,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ z
     const timeline = await resolveTimelineContext(mapId, timelineIndex);
     await markTimelineTileTombstone(mapId, timeline.node.id, z, x, y);
 
-    if (shouldGenerateRealtimeParentTiles(mapId)) {
+    if (shouldGenerateRealtimeParentTiles(mapId, "delete")) {
       let cz = z;
       let cx = x;
       let cy = y;

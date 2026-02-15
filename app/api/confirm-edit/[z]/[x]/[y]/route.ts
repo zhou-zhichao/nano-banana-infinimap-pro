@@ -15,6 +15,7 @@ import { resolveEffectiveTileBuffer, writeTimelineTileReady } from "@/lib/timeli
 
 const requestSchema = z.object({
   previewUrl: z.string(),
+  previewMode: z.enum(["raw", "blended"]).optional(),
   applyToAllNew: z.boolean().optional(),
   newTilePositions: z.array(z.object({ x: z.number(), y: z.number() })).optional(),
   selectedPositions: z.array(z.object({ x: z.number(), y: z.number() })).optional(),
@@ -114,9 +115,11 @@ export async function POST(
 
     const timeline = await resolveTimelineContext(mapId, timelineIndex);
     const body = await req.json();
-    const { previewUrl, applyToAllNew, newTilePositions, selectedPositions, offsetX, offsetY } = requestSchema.parse(body);
+    const { previewUrl, previewMode, applyToAllNew, newTilePositions, selectedPositions, offsetX, offsetY } =
+      requestSchema.parse(body);
+    const effectivePreviewMode = previewMode ?? "blended";
     const selectedSet =
-      selectedPositions && selectedPositions.length > 0
+      effectivePreviewMode === "blended" && selectedPositions && selectedPositions.length > 0
         ? new Set(selectedPositions.map((position) => `${position.x},${position.y}`))
         : null;
 
@@ -162,63 +165,65 @@ export async function POST(
       confidence: 0,
     };
 
-    if (
-      typeof offsetX === "number" &&
-      typeof offsetY === "number" &&
-      Number.isFinite(offsetX) &&
-      Number.isFinite(offsetY)
-    ) {
-      const tx = Math.round(offsetX);
-      const ty = Math.round(offsetY);
-      compositeBuffer = await translateImage(compositeBuffer, gridSize, gridSize, tx, ty);
-      driftCorrection = { source: "manual", tx, ty, candidateCount: 0, confidence: 1 };
-    } else {
-      let hasSelectedExisting = false;
-      outer: for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const tileX = centerX + dx;
-          const tileY = centerY + dy;
-          if (!isTileInBounds(map, z, tileX, tileY)) continue;
-          const key = `${tileX},${tileY}`;
-          if (selectedSet && !selectedSet.has(key)) continue;
-          const existing = await resolveEffectiveTileBuffer(timeline, z, tileX, tileY);
-          if (existing) {
-            hasSelectedExisting = true;
-            break outer;
+    if (effectivePreviewMode === "blended") {
+      if (
+        typeof offsetX === "number" &&
+        typeof offsetY === "number" &&
+        Number.isFinite(offsetX) &&
+        Number.isFinite(offsetY)
+      ) {
+        const tx = Math.round(offsetX);
+        const ty = Math.round(offsetY);
+        compositeBuffer = await translateImage(compositeBuffer, gridSize, gridSize, tx, ty);
+        driftCorrection = { source: "manual", tx, ty, candidateCount: 0, confidence: 1 };
+      } else {
+        let hasSelectedExisting = false;
+        outer: for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const tileX = centerX + dx;
+            const tileY = centerY + dy;
+            if (!isTileInBounds(map, z, tileX, tileY)) continue;
+            const key = `${tileX},${tileY}`;
+            if (selectedSet && !selectedSet.has(key)) continue;
+            const existing = await resolveEffectiveTileBuffer(timeline, z, tileX, tileY);
+            if (existing) {
+              hasSelectedExisting = true;
+              break outer;
+            }
           }
         }
-      }
 
-      if (hasSelectedExisting) {
-        try {
-          const estimated = await estimateGridDriftFromExistingTiles({
-            rawComposite: compositeBuffer,
-            z,
-            centerX,
-            centerY,
-            selectedSet,
-            tileSize: TILE,
-            readTile: (tileZ, tileX, tileY) => resolveEffectiveTileBuffer(timeline, tileZ, tileX, tileY),
-          });
+        if (hasSelectedExisting) {
+          try {
+            const estimated = await estimateGridDriftFromExistingTiles({
+              rawComposite: compositeBuffer,
+              z,
+              centerX,
+              centerY,
+              selectedSet,
+              tileSize: TILE,
+              readTile: (tileZ, tileX, tileY) => resolveEffectiveTileBuffer(timeline, tileZ, tileX, tileY),
+            });
 
-          driftCorrection = {
-            source: estimated.source,
-            tx: estimated.applied ? estimated.tx : 0,
-            ty: estimated.applied ? estimated.ty : 0,
-            candidateCount: estimated.candidateCount,
-            confidence: estimated.confidence,
-          };
-          if (estimated.applied) {
-            compositeBuffer = await translateImage(compositeBuffer, gridSize, gridSize, estimated.tx, estimated.ty);
+            driftCorrection = {
+              source: estimated.source,
+              tx: estimated.applied ? estimated.tx : 0,
+              ty: estimated.applied ? estimated.ty : 0,
+              candidateCount: estimated.candidateCount,
+              confidence: estimated.confidence,
+            };
+            if (estimated.applied) {
+              compositeBuffer = await translateImage(compositeBuffer, gridSize, gridSize, estimated.tx, estimated.ty);
+            }
+          } catch (driftErr) {
+            console.warn("Auto drift estimation failed:", driftErr);
           }
-        } catch (driftErr) {
-          console.warn("Auto drift estimation failed:", driftErr);
         }
       }
     }
 
     const generatedTiles = await extractTiles(compositeBuffer);
-    const mask3x3 = await createCircularGradientMask(TILE * 3);
+    const mask3x3 = effectivePreviewMode === "blended" ? await createCircularGradientMask(TILE * 3) : null;
     const updatedPositions: { x: number; y: number }[] = [];
 
     for (let dy = -1; dy <= 1; dy++) {
@@ -231,18 +236,20 @@ export async function POST(
         const existingBuffer = await resolveEffectiveTileBuffer(timeline, z, tileX, tileY);
         const exists = Boolean(existingBuffer);
 
-        if (selectedSet && !selectedSet.has(key)) continue;
-        if (
-          !selectedSet &&
-          !exists &&
-          !(applyToAllNew && newTilePositions && newTilePositions.length > 0) &&
-          !(dx === 0 && dy === 0)
-        ) {
-          continue;
+        if (effectivePreviewMode === "blended") {
+          if (selectedSet && !selectedSet.has(key)) continue;
+          if (
+            !selectedSet &&
+            !exists &&
+            !(applyToAllNew && newTilePositions && newTilePositions.length > 0) &&
+            !(dx === 0 && dy === 0)
+          ) {
+            continue;
+          }
         }
 
         let finalTile = generatedTiles[dy + 1][dx + 1];
-        if (exists && existingBuffer) {
+        if (effectivePreviewMode === "blended" && exists && existingBuffer && mask3x3) {
           const tileMask = await sharp(mask3x3)
             .extract({ left: (dx + 1) * TILE, top: (dy + 1) * TILE, width: TILE, height: TILE })
             .png()
@@ -261,7 +268,7 @@ export async function POST(
       }
     }
 
-    if (shouldGenerateRealtimeParentTiles(mapId)) {
+    if (shouldGenerateRealtimeParentTiles(mapId, "confirm-edit")) {
       let levelZ = z;
       let currentLevel = new Set(updatedPositions.map((position) => `${position.x},${position.y}`));
       while (levelZ > 0 && currentLevel.size > 0) {
