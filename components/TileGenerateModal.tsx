@@ -441,7 +441,7 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
           data-dialog-root
           onPointerDownOutside={(event) => event.preventDefault()}
           onInteractOutside={(event) => event.preventDefault()}
-          className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-2xl shadow-xl p-0 w-[min(100vw,800px)] max-h-[90vh] overflow-auto z-[10001]"
+          className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-2xl shadow-xl p-0 w-[min(100vw,980px)] max-h-[90vh] overflow-auto z-[10001]"
         >
           <div className="flex flex-col h-full">
             <div className="px-4 pt-4">
@@ -464,9 +464,10 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
               </div>
             </div>
 
-            <div className="px-4 pb-4 space-y-4 flex-1">
-              {/* Prompt area with circular generate CTA */}
-              <div className="space-y-2">
+            <div className="px-4 pb-4 flex-1 flex flex-col gap-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                {/* Prompt area with circular generate CTA */}
+                <div className="space-y-2 md:order-2 md:flex md:h-full md:flex-col">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">Model</span>
                   <div className="inline-flex rounded-lg border bg-gray-50 p-0.5">
@@ -498,14 +499,14 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                     })}
                   </div>
                 </div>
-                <div className="relative">
+                <div className="relative md:flex-1">
                   <textarea
                     id="prompt"
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     placeholder="Describe what you want to generate..."
-                    className="min-h-[64px] w-full resize-y rounded-xl border border-gray-300 px-3 py-2 pr-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
-                    rows={3}
+                    className="min-h-[180px] w-full resize-y rounded-xl border border-gray-300 px-3 py-2 pr-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 md:h-full"
+                    rows={6}
                     disabled={loading}
                   />
                   <div className="absolute bottom-2 right-2">
@@ -543,11 +544,11 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                     {error}
                   </div>
                 )}
-              </div>
+                </div>
 
-              {/* Tabs: Original vs Preview */}
-              <div className="space-y-2">
-                <Tabs.Root value={activeTab} onValueChange={setActiveTab}>
+                {/* Tabs: Original vs Preview */}
+                <div className="space-y-2 md:order-1 md:h-full">
+                <Tabs.Root value={activeTab} onValueChange={setActiveTab} className="md:h-full">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium">Image View</span>
                   <div className="flex items-center gap-2">
@@ -691,6 +692,7 @@ export function TileGenerateModal({ mapId, timelineIndex, open, onClose, x, y, z
                     {/* Compact summary moved to footer toolbar */}
                   </Tabs.Content>
                 </Tabs.Root>
+                </div>
               </div>
 
               {/* Compact Footer Toolbar */}
