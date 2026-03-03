@@ -106,6 +106,8 @@ export default function BatchStatusPanel({ state, onCancel, review }: BatchStatu
           )}
         </div>
 
+        {state.error && <div className="text-xs text-red-600 mt-1 mb-2 break-words">{state.error}</div>}
+
         <div className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5 mb-2">
           <div className="text-[11px] font-medium text-gray-700 mb-0.5">Generate</div>
           <div className="text-[11px] text-gray-600 leading-5">

@@ -585,6 +585,19 @@ export function startBatchRun(input: StartBatchRunInput): BatchRunHandle {
     return job;
   };
 
+  const parseParentTilesFromResponse = (json: unknown): TileCoord[] => {
+    const parentTilesField = (json as { parentTiles?: unknown })?.parentTiles;
+    const parentTilesRaw: unknown[] = Array.isArray(parentTilesField) ? parentTilesField : [];
+    const parentTiles: TileCoord[] = [];
+    for (const item of parentTilesRaw) {
+      const x = Number((item as { x?: unknown })?.x);
+      const y = Number((item as { y?: unknown })?.y);
+      if (!Number.isInteger(x) || !Number.isInteger(y)) continue;
+      parentTiles.push({ x, y });
+    }
+    return dedupeTileCoords(parentTiles);
+  };
+
   const refreshParentLevelOverApi = async (
     childZ: number,
     childTiles: TileCoord[],
@@ -598,16 +611,8 @@ export function startBatchRun(input: StartBatchRunInput): BatchRunHandle {
     if (!response.ok) {
       throw await toHttpError(response, `Failed parent refresh at child level z=${childZ}`);
     }
-    const json = (await response.json().catch(() => ({}))) as { parentTiles?: unknown };
-    const parentTilesRaw = Array.isArray(json.parentTiles) ? json.parentTiles : [];
-    const parentTiles: TileCoord[] = [];
-    for (const item of parentTilesRaw) {
-      const x = Number((item as any)?.x);
-      const y = Number((item as any)?.y);
-      if (!Number.isInteger(x) || !Number.isInteger(y)) continue;
-      parentTiles.push({ x, y });
-    }
-    return { parentTiles: dedupeTileCoords(parentTiles) };
+    const json = (await response.json().catch(() => ({}))) as unknown;
+    return { parentTiles: parseParentTilesFromResponse(json) };
   };
 
   const runParentJob = async (job: ParentRefreshJob) => {
@@ -912,9 +917,69 @@ export function startBatchRun(input: StartBatchRunInput): BatchRunHandle {
     }
   };
 
+  const HEARTBEAT_INTERVAL_MS = 30_000;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  const acquireLock = async (): Promise<void> => {
+    if (!state.coverageBounds) return;
+    const response = await fetchImpl("/api/batch/lock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runId: state.runId,
+        mapId,
+        timelineIndex,
+        z,
+        bounds: state.coverageBounds,
+      }),
+      signal,
+    });
+    if (response.status === 409) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        conflict?: { runId?: string; bounds?: unknown };
+      };
+      const conflictInfo = body.conflict
+        ? ` (conflict: run ${body.conflict.runId})`
+        : "";
+      throw new Error(
+        `Region lock conflict: ${body.error ?? "overlapping batch run in progress"}${conflictInfo}`,
+      );
+    }
+    if (!response.ok) {
+      const body = await readResponseErrorMessage(response, "Failed to acquire region lock");
+      throw new Error(body);
+    }
+  };
+
+  const startHeartbeat = () => {
+    heartbeatTimer = setInterval(() => {
+      void fetchImpl("/api/batch/lock", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId: state.runId }),
+      }).catch(() => null);
+    }, HEARTBEAT_INTERVAL_MS);
+  };
+
+  const releaseLock = async () => {
+    if (heartbeatTimer != null) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    await fetchImpl("/api/batch/lock", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId: state.runId }),
+    }).catch(() => null);
+  };
+
   const done = (async (): Promise<BatchRunState> => {
     emit();
     try {
+      await acquireLock();
+      startHeartbeat();
+
       if (schedulingMode === "rolling_fill") {
         await runGenerationRollingFill();
       } else {
@@ -946,7 +1011,29 @@ export function startBatchRun(input: StartBatchRunInput): BatchRunHandle {
       emit();
       abortController.abort();
       await Promise.allSettled([...rollingInFlight.values(), ...parentWorkers]);
+      const cleanupLeaves = toTileCoords(allTouchedParentLeaves);
+      if (cleanupLeaves.length > 0) {
+        let childZ = z;
+        let childTiles = cleanupLeaves;
+        while (childZ > 0 && childTiles.length > 0) {
+          try {
+            const response = await fetchImpl(withMapTimeline("/api/parents/refresh-region", mapId, timelineIndex), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ childZ, childTiles }),
+            });
+            if (!response.ok) break;
+            const json = (await response.json()) as unknown;
+            childTiles = parseParentTilesFromResponse(json);
+            childZ -= 1;
+          } catch {
+            break;
+          }
+        }
+      }
       return cloneState(state);
+    } finally {
+      await releaseLock();
     }
   })();
 

@@ -25,6 +25,27 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 2000, poll
   throw new Error(`Timed out after ${timeoutMs}ms`);
 }
 
+function testJsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function createDefaultFetchImpl(): typeof fetch {
+  return async (input) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("/api/batch/lock")) {
+      return testJsonResponse({});
+    }
+    if (url.startsWith("/api/parents/refresh-region")) {
+      return testJsonResponse({ parentTiles: [] });
+    }
+    throw new Error(`Unexpected fetch call in test: ${url}`);
+  };
+}
+
 function createBaseInput(overrides: Partial<StartBatchRunInput> = {}): StartBatchRunInput {
   return {
     mapId: "test-map",
@@ -37,6 +58,7 @@ function createBaseInput(overrides: Partial<StartBatchRunInput> = {}): StartBatc
     layers: 2,
     prompt: "batch test",
     maxParallel: 4,
+    fetchImpl: createDefaultFetchImpl(),
     ...overrides,
   };
 }
@@ -270,6 +292,48 @@ test("failed anchor blocks downstream dependents", async () => {
   const finalState = await handle.done;
   assert.equal(finalState.anchors["u:1,v:0"]?.status, "FAILED");
   assert.equal(finalState.anchors["u:2,v:0"]?.status, "BLOCKED");
+});
+
+test("failed run performs final parent cleanup cascade for touched leaves", async () => {
+  const cleanupChildZs: number[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("/api/batch/lock")) {
+      return testJsonResponse({});
+    }
+    if (url.startsWith("/api/parents/refresh-region")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { childZ?: unknown };
+      const childZ = Number(body.childZ);
+      cleanupChildZs.push(childZ);
+      return testJsonResponse({
+        parentTiles: childZ > 1 ? [{ x: 0, y: 0 }] : [],
+      });
+    }
+    throw new Error(`Unexpected fetch call in test: ${url}`);
+  };
+
+  const handle = startBatchRun(
+    createBaseInput({
+      z: 3,
+      layers: 1,
+      maxParallel: 1,
+      parentCascadeDepth: 1,
+      parentDebounceMs: 0,
+      parentWaveBatchSize: 1,
+      parentJobRetries: 0,
+      fetchImpl,
+      executeAnchor: async () => {
+        await delay(1);
+      },
+      refreshParentLevel: async () => {
+        throw new Error("parent refresh failure");
+      },
+    }),
+  );
+  const finalState = await handle.done;
+  assert.equal(finalState.status, "FAILED");
+  assert.deepEqual(cleanupChildZs, [3, 2, 1]);
 });
 
 test("parent refresh hard failure transitions batch to FAILED after retries", async () => {

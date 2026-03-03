@@ -183,7 +183,7 @@ export default function BatchGenerateModal({
               type="button"
               disabled={running || !cleanedPrompt}
               onClick={() => {
-                void submit();
+                void submit().catch(() => {});
               }}
               className="h-8 px-3 text-xs rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60"
             >

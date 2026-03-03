@@ -563,6 +563,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
             void refreshVisibleTiles(runTimeline);
           }
         })
+        .catch(() => {})
         .finally(async () => {
           if (batchRunTokenRef.current === runToken) {
             batchRunTokenRef.current = null;
