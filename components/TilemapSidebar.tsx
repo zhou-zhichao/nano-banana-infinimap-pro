@@ -27,6 +27,9 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
   const [error, setError] = useState<string | null>(null);
   const [deletingMapId, setDeletingMapId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [refreshingAllParents, setRefreshingAllParents] = useState(false);
+  const [refreshAllError, setRefreshAllError] = useState<string | null>(null);
+  const [refreshAllMessage, setRefreshAllMessage] = useState<string | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitStatusResponse | null>(null);
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
 
@@ -140,6 +143,33 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
     }
   };
 
+  const refreshAllTilemapParents = async () => {
+    const confirmed = window.confirm(`Regenerate parent hierarchy for all ${items.length} tilemap(s)?`);
+    if (!confirmed) return;
+
+    setRefreshingAllParents(true);
+    setRefreshAllError(null);
+    setRefreshAllMessage(null);
+    try {
+      const response = await fetch("/api/tilemaps/refresh-parents", {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to start parent regeneration");
+      }
+      setRefreshAllMessage(
+        typeof data?.message === "string" && data.message.trim()
+          ? data.message
+          : `Parent regeneration started for ${items.length} tilemap(s)`,
+      );
+    } catch (err) {
+      setRefreshAllError(err instanceof Error ? err.message : "Failed to start parent regeneration");
+    } finally {
+      setRefreshingAllParents(false);
+    }
+  };
+
   return (
     <aside
       className={`${collapsed ? "w-14" : "w-72"} border-r border-gray-200 bg-gray-50/90 h-full flex flex-col transition-[width] duration-200`}
@@ -155,9 +185,25 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
         )}
 
         {!collapsed && (
-          <button className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700" onClick={openCreateModal}>
-            New
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="h-8 px-3 rounded-md border border-gray-300 bg-white text-gray-700 text-xs font-medium hover:bg-gray-100 disabled:opacity-60"
+              onClick={() => {
+                void refreshAllTilemapParents();
+              }}
+              disabled={refreshingAllParents || items.length === 0}
+              title="Regenerate parent hierarchy for all tilemaps"
+              aria-label="Regenerate parent hierarchy for all tilemaps"
+            >
+              {refreshingAllParents ? "Starting..." : "Regen All"}
+            </button>
+            <button
+              className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+              onClick={openCreateModal}
+            >
+              New
+            </button>
+          </div>
         )}
 
         <button
@@ -171,7 +217,18 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
       </div>
 
       {collapsed ? (
-        <div className="flex-1 p-2 flex items-start justify-center">
+        <div className="flex-1 p-2 flex flex-col items-center gap-2">
+          <button
+            className="h-8 w-8 rounded-md border border-gray-300 bg-white text-[10px] font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-60"
+            onClick={() => {
+              void refreshAllTilemapParents();
+            }}
+            disabled={refreshingAllParents || items.length === 0}
+            title="Regenerate parent hierarchy for all tilemaps"
+            aria-label="Regenerate parent hierarchy for all tilemaps"
+          >
+            {refreshingAllParents ? "..." : "P"}
+          </button>
           <button
             className="h-8 w-8 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
             onClick={openCreateModal}
@@ -183,6 +240,14 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
         </div>
       ) : (
         <div className="flex-1 overflow-auto p-2">
+          {refreshAllError && (
+            <div className="mb-2 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">{refreshAllError}</div>
+          )}
+          {refreshAllMessage && (
+            <div className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-700">
+              {refreshAllMessage}
+            </div>
+          )}
           <div className="mb-3 rounded-md border border-gray-200 bg-white p-2">
             <div className="mb-1 flex items-center justify-between">
               <div className="text-xs font-semibold text-gray-800">Gemini Quota</div>
