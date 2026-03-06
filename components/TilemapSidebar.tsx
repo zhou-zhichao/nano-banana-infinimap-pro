@@ -27,13 +27,14 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
   const [error, setError] = useState<string | null>(null);
   const [deletingMapId, setDeletingMapId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [refreshingAllParents, setRefreshingAllParents] = useState(false);
-  const [refreshAllError, setRefreshAllError] = useState<string | null>(null);
-  const [refreshAllMessage, setRefreshAllMessage] = useState<string | null>(null);
+  const [refreshingParents, setRefreshingParents] = useState(false);
+  const [refreshParentsError, setRefreshParentsError] = useState<string | null>(null);
+  const [refreshParentsMessage, setRefreshParentsMessage] = useState<string | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitStatusResponse | null>(null);
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
 
   const items = useMemo(() => tilemaps, [tilemaps]);
+  const activeMap = useMemo(() => items.find((item) => item.id === activeMapId) ?? null, [activeMapId, items]);
   const modelEntries = useMemo(
     () =>
       rateLimit
@@ -143,30 +144,31 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
     }
   };
 
-  const refreshAllTilemapParents = async () => {
-    const confirmed = window.confirm(`Regenerate parent hierarchy for all ${items.length} tilemap(s)?`);
+  const refreshCurrentTilemapParents = async () => {
+    if (!activeMap) return;
+    const confirmed = window.confirm(`Regenerate parent hierarchy for "${activeMap.name}"?`);
     if (!confirmed) return;
 
-    setRefreshingAllParents(true);
-    setRefreshAllError(null);
-    setRefreshAllMessage(null);
+    setRefreshingParents(true);
+    setRefreshParentsError(null);
+    setRefreshParentsMessage(null);
     try {
-      const response = await fetch("/api/tilemaps/refresh-parents", {
+      const response = await fetch(`/api/generate-parents?mapId=${encodeURIComponent(activeMap.id)}`, {
         method: "POST",
       });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data?.error || "Failed to start parent regeneration");
       }
-      setRefreshAllMessage(
+      setRefreshParentsMessage(
         typeof data?.message === "string" && data.message.trim()
           ? data.message
-          : `Parent regeneration started for ${items.length} tilemap(s)`,
+          : `Parent regeneration started for "${activeMap.name}"`,
       );
     } catch (err) {
-      setRefreshAllError(err instanceof Error ? err.message : "Failed to start parent regeneration");
+      setRefreshParentsError(err instanceof Error ? err.message : "Failed to start parent regeneration");
     } finally {
-      setRefreshingAllParents(false);
+      setRefreshingParents(false);
     }
   };
 
@@ -189,13 +191,13 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
             <button
               className="h-8 px-3 rounded-md border border-gray-300 bg-white text-gray-700 text-xs font-medium hover:bg-gray-100 disabled:opacity-60"
               onClick={() => {
-                void refreshAllTilemapParents();
+                void refreshCurrentTilemapParents();
               }}
-              disabled={refreshingAllParents || items.length === 0}
-              title="Regenerate parent hierarchy for all tilemaps"
-              aria-label="Regenerate parent hierarchy for all tilemaps"
+              disabled={refreshingParents || !activeMap}
+              title="Regenerate parent hierarchy for current tilemap"
+              aria-label="Regenerate parent hierarchy for current tilemap"
             >
-              {refreshingAllParents ? "Starting..." : "Regen All"}
+              {refreshingParents ? "Starting..." : "Regen Map"}
             </button>
             <button
               className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
@@ -221,13 +223,13 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
           <button
             className="h-8 w-8 rounded-md border border-gray-300 bg-white text-[10px] font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-60"
             onClick={() => {
-              void refreshAllTilemapParents();
+              void refreshCurrentTilemapParents();
             }}
-            disabled={refreshingAllParents || items.length === 0}
-            title="Regenerate parent hierarchy for all tilemaps"
-            aria-label="Regenerate parent hierarchy for all tilemaps"
+            disabled={refreshingParents || !activeMap}
+            title="Regenerate parent hierarchy for current tilemap"
+            aria-label="Regenerate parent hierarchy for current tilemap"
           >
-            {refreshingAllParents ? "..." : "P"}
+            {refreshingParents ? "..." : "M"}
           </button>
           <button
             className="h-8 w-8 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
@@ -240,12 +242,12 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
         </div>
       ) : (
         <div className="flex-1 overflow-auto p-2">
-          {refreshAllError && (
-            <div className="mb-2 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">{refreshAllError}</div>
+          {refreshParentsError && (
+            <div className="mb-2 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">{refreshParentsError}</div>
           )}
-          {refreshAllMessage && (
+          {refreshParentsMessage && (
             <div className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-700">
-              {refreshAllMessage}
+              {refreshParentsMessage}
             </div>
           )}
           <div className="mb-3 rounded-md border border-gray-200 bg-white p-2">
