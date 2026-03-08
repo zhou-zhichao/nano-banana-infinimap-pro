@@ -1,0 +1,10 @@
+{
+  "id": "final-map",
+  "name": "final map",
+  "template": "moon",
+  "baseStorage": "preset_overlay",
+  "width": 61,
+  "height": 41,
+  "createdAt": "2026-03-03T12:36:15.966Z",
+  "updatedAt": "2026-03-03T12:36:15.966Z"
+}

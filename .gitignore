@@ -49,6 +49,12 @@ next-env.d.ts
 # tilemaps v1 data layout
 /.tilemaps/maps/**
 !/.tilemaps/maps/
+!/.tilemaps/maps/final-map/
+!/.tilemaps/maps/final-map/map.json
+!/.tilemaps/maps/final-map/meta/
+!/.tilemaps/maps/final-map/meta/*.json
+!/.tilemaps/maps/final-map/tiles/
+!/.tilemaps/maps/final-map/tiles/*.webp
 /.tilemaps/**/timeline/
 /.tilemaps/**/locks/
 /.tilemaps/**/queue/

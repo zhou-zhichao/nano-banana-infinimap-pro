@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { getParentGenerationPercent, type ParentGenerationStatus } from "@/lib/parentGenerationProgress";
 import type { TilemapManifest, TilemapTemplate } from "@/lib/tilemaps/types";
 import { formatCounter, toPercent, type RateLimitStatusResponse } from "@/lib/rateLimitStatus";
 import { DEFAULT_MAP_ID } from "@/lib/tilemaps/constants";
@@ -16,7 +18,33 @@ type Props = {
 const DEFAULT_BLANK_WIDTH = 64;
 const DEFAULT_BLANK_HEIGHT = 64;
 
+function parseTimelineIndex(value: string | null) {
+  if (!value) return 1;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function buildParentGenerationUrl(mapId: string, timelineIndex: number) {
+  return `/api/generate-parents?mapId=${encodeURIComponent(mapId)}&t=${encodeURIComponent(String(timelineIndex))}`;
+}
+
+async function readJsonPayload(response: Response, fallbackMessage: string) {
+  const text = await response.text().catch(() => "");
+  if (!text.trim()) return {} as Record<string, unknown>;
+
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    const trimmed = text.trim();
+    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+      throw new Error(fallbackMessage);
+    }
+    throw new Error(trimmed || fallbackMessage);
+  }
+}
+
 export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCreated, onDeleted }: Props) {
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [name, setName] = useState("");
@@ -29,12 +57,15 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [refreshingParents, setRefreshingParents] = useState(false);
   const [refreshParentsError, setRefreshParentsError] = useState<string | null>(null);
-  const [refreshParentsMessage, setRefreshParentsMessage] = useState<string | null>(null);
+  const [parentGeneration, setParentGeneration] = useState<ParentGenerationStatus | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitStatusResponse | null>(null);
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
 
   const items = useMemo(() => tilemaps, [tilemaps]);
   const activeMap = useMemo(() => items.find((item) => item.id === activeMapId) ?? null, [activeMapId, items]);
+  const activeTimelineIndex = useMemo(() => parseTimelineIndex(searchParams.get("t")), [searchParams]);
+  const parentGenerationPercent = useMemo(() => getParentGenerationPercent(parentGeneration), [parentGeneration]);
+  const parentGenerationRunning = parentGeneration?.state === "RUNNING";
   const modelEntries = useMemo(
     () =>
       rateLimit
@@ -78,6 +109,55 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
       if (timeout) clearTimeout(timeout);
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeMap) {
+      setParentGeneration(null);
+      setRefreshParentsError(null);
+      return;
+    }
+
+    setParentGeneration(null);
+    setRefreshParentsError(null);
+
+    let disposed = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const idlePollMs = 15_000;
+    const runningPollMs = 1_000;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(buildParentGenerationUrl(activeMap.id, activeTimelineIndex), { cache: "no-store" });
+        const data = await readJsonPayload(response, "Parent generation status temporarily unavailable");
+        if (!response.ok) {
+          throw new Error(
+            typeof data?.error === "string" && data.error.trim()
+              ? data.error.trim()
+              : "Failed to load parent generation status",
+          );
+        }
+        if (disposed) return;
+        const nextStatus = (data?.status ?? null) as ParentGenerationStatus | null;
+        setParentGeneration(nextStatus);
+        if (nextStatus?.state === "FAILED") {
+          setRefreshParentsError(nextStatus.error || "Parent regeneration failed");
+        } else {
+          setRefreshParentsError(null);
+        }
+        timeout = setTimeout(poll, nextStatus?.state === "RUNNING" ? runningPollMs : idlePollMs);
+      } catch (err) {
+        if (disposed) return;
+        setRefreshParentsError(err instanceof Error ? err.message : "Failed to load parent generation status");
+        timeout = setTimeout(poll, idlePollMs);
+      }
+    };
+
+    void poll();
+    return () => {
+      disposed = true;
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [activeMap, activeTimelineIndex]);
 
   const resetForm = () => {
     setName("");
@@ -151,20 +231,19 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
 
     setRefreshingParents(true);
     setRefreshParentsError(null);
-    setRefreshParentsMessage(null);
     try {
-      const response = await fetch(`/api/generate-parents?mapId=${encodeURIComponent(activeMap.id)}`, {
+      const response = await fetch(buildParentGenerationUrl(activeMap.id, activeTimelineIndex), {
         method: "POST",
       });
-      const data = await response.json();
+      const data = await readJsonPayload(response, "Failed to start parent regeneration");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to start parent regeneration");
+        throw new Error(
+          typeof data?.error === "string" && data.error.trim()
+            ? data.error.trim()
+            : "Failed to start parent regeneration",
+        );
       }
-      setRefreshParentsMessage(
-        typeof data?.message === "string" && data.message.trim()
-          ? data.message
-          : `Parent regeneration started for "${activeMap.name}"`,
-      );
+      setParentGeneration(((data?.status ?? null) as ParentGenerationStatus | null) ?? null);
     } catch (err) {
       setRefreshParentsError(err instanceof Error ? err.message : "Failed to start parent regeneration");
     } finally {
@@ -193,11 +272,11 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
               onClick={() => {
                 void refreshCurrentTilemapParents();
               }}
-              disabled={refreshingParents || !activeMap}
+              disabled={refreshingParents || parentGenerationRunning || !activeMap}
               title="Regenerate parent hierarchy for current tilemap"
               aria-label="Regenerate parent hierarchy for current tilemap"
             >
-              {refreshingParents ? "Starting..." : "Regen Map"}
+              {refreshingParents ? "Starting..." : parentGenerationRunning ? "Running..." : "Regen Map"}
             </button>
             <button
               className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
@@ -225,11 +304,11 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
             onClick={() => {
               void refreshCurrentTilemapParents();
             }}
-            disabled={refreshingParents || !activeMap}
+            disabled={refreshingParents || parentGenerationRunning || !activeMap}
             title="Regenerate parent hierarchy for current tilemap"
             aria-label="Regenerate parent hierarchy for current tilemap"
           >
-            {refreshingParents ? "..." : "M"}
+            {refreshingParents || parentGenerationRunning ? "..." : "M"}
           </button>
           <button
             className="h-8 w-8 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
@@ -245,9 +324,35 @@ export default function TilemapSidebar({ tilemaps, activeMapId, onSelect, onCrea
           {refreshParentsError && (
             <div className="mb-2 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">{refreshParentsError}</div>
           )}
-          {refreshParentsMessage && (
-            <div className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-700">
-              {refreshParentsMessage}
+          {parentGeneration && parentGeneration.state !== "IDLE" && (
+            <div className="mb-2 rounded-md border border-blue-200 bg-white px-2 py-2 text-xs text-gray-700">
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-semibold text-gray-900">Parent Regen</div>
+                <div className="text-[11px] text-gray-500">{parentGenerationPercent}%</div>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded bg-gray-200">
+                <div
+                  className={`h-full rounded transition-[width] duration-300 ${
+                    parentGeneration.state === "FAILED"
+                      ? "bg-red-500"
+                      : parentGeneration.state === "COMPLETED"
+                        ? "bg-green-500"
+                        : "bg-blue-500"
+                  }`}
+                  style={{ width: `${parentGenerationPercent}%` }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-gray-600">
+                <span>
+                  {parentGeneration.processedTiles}/{parentGeneration.totalTiles || 0} processed
+                </span>
+                <span>z={parentGeneration.currentZ == null ? "-" : parentGeneration.currentZ}</span>
+              </div>
+              <div className="mt-1 text-[11px] text-gray-600">
+                generated {parentGeneration.generatedTiles} | skipped {parentGeneration.skippedTiles}
+              </div>
+              {parentGeneration.message && <div className="mt-1 text-[11px] text-gray-600">{parentGeneration.message}</div>}
+              {parentGeneration.error && <div className="mt-1 text-[11px] text-red-600">{parentGeneration.error}</div>}
             </div>
           )}
           <div className="mb-3 rounded-md border border-gray-200 bg-white p-2">

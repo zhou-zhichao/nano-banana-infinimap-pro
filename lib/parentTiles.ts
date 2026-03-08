@@ -10,11 +10,13 @@ import { MOON_HEIGHT, MOON_WIDTH } from "./tilemaps/constants";
 import { TILEMAPS_PRESET_MOON_TILES_DIR } from "./tilemaps/paths";
 import { getTilemapManifest } from "./tilemaps/service";
 import { getTransparentTileBuffer } from "./transparentTile";
+import type { ParentGenerationProgressUpdate } from "./parentGenerationProgress";
 import { TimelineContext } from "./timeline/types";
 import {
   markTimelineTileTombstone,
   readTimelineNodeMeta,
   resolveEffectiveTileBuffer,
+  resolveEffectiveTileMeta,
   writeTimelineTileReady,
 } from "./timeline/storage";
 
@@ -54,13 +56,40 @@ async function composeParentTile(childBuffers: (Buffer | null)[]) {
   }
 }
 
-export async function generateParentTile(mapId: string, z: number, x: number, y: number): Promise<Buffer | null> {
+async function readBaselineChildBuffers(mapId: string, z: number, x: number, y: number) {
   const children = childrenOf(z, x, y);
-  const childBuffers = await Promise.all(children.map((child) => readTileFile(mapId, child.z, child.x, child.y)));
-  const hasChildren = childBuffers.some((buffer) => buffer !== null);
-  if (!hasChildren) return null;
+  return Promise.all(children.map((child) => readTileFile(mapId, child.z, child.x, child.y)));
+}
 
-  const parentTile = await composeParentTile(childBuffers);
+async function readTimelineChildBuffers(context: TimelineContext, z: number, x: number, y: number) {
+  const children = childrenOf(z, x, y);
+  return Promise.all(children.map((child) => resolveEffectiveTileBuffer(context, child.z, child.x, child.y)));
+}
+
+function hasAnyChildBuffers(childBuffers: (Buffer | null)[]) {
+  return childBuffers.some((buffer) => buffer !== null);
+}
+
+function countTotalParentTilesForMap(width: number, height: number) {
+  let totalTiles = 0;
+  for (let z = ZMAX - 1; z >= 0; z--) {
+    const divisor = 2 ** (ZMAX - z);
+    totalTiles += Math.ceil(width / divisor) * Math.ceil(height / divisor);
+  }
+  return totalTiles;
+}
+
+export async function generateParentTile(
+  mapId: string,
+  z: number,
+  x: number,
+  y: number,
+  childBuffers?: (Buffer | null)[],
+): Promise<Buffer | null> {
+  const resolvedChildBuffers = childBuffers ?? (await readBaselineChildBuffers(mapId, z, x, y));
+  if (!hasAnyChildBuffers(resolvedChildBuffers)) return null;
+
+  const parentTile = await composeParentTile(resolvedChildBuffers);
   await writeTileFile(mapId, z, x, y, parentTile);
 
   const bytesHash = blake2sHex(parentTile).slice(0, 16);
@@ -91,18 +120,15 @@ export async function generateParentTileAtNode(
   z: number,
   x: number,
   y: number,
+  childBuffers?: (Buffer | null)[],
 ): Promise<Buffer | null> {
-  const children = childrenOf(z, x, y);
-  const childBuffers = await Promise.all(
-    children.map((child) => resolveEffectiveTileBuffer(context, child.z, child.x, child.y)),
-  );
-  const hasChildren = childBuffers.some((buffer) => buffer !== null);
-  if (!hasChildren) {
+  const resolvedChildBuffers = childBuffers ?? (await readTimelineChildBuffers(context, z, x, y));
+  if (!hasAnyChildBuffers(resolvedChildBuffers)) {
     await markTimelineTileTombstone(context.mapId, context.node.id, z, x, y);
     return null;
   }
 
-  const parentTile = await composeParentTile(childBuffers);
+  const parentTile = await composeParentTile(resolvedChildBuffers);
   const bytesHash = blake2sHex(parentTile).slice(0, 16);
   const current = await readTimelineNodeMeta(context.mapId, context.node.id, z, x, y);
   const contentVer = (current?.contentVer ?? 0) + 1;
@@ -120,21 +146,99 @@ export async function generateParentTileAtNode(
   return parentTile;
 }
 
-export async function generateAllParentTiles(mapId: string) {
+type GenerateAllParentTilesOptions = {
+  onProgress?: (progress: ParentGenerationProgressUpdate) => void;
+};
+
+export async function generateAllParentTiles(mapId: string, options: GenerateAllParentTilesOptions = {}) {
   const map = await getTilemapManifest(mapId);
   if (!map) throw new Error(`Tilemap "${mapId}" not found`);
+
+  const totalTiles = countTotalParentTilesForMap(map.width, map.height);
+  let processedTiles = 0;
+  let generatedTiles = 0;
+  let skippedTiles = 0;
+  options.onProgress?.({
+    totalTiles,
+    processedTiles,
+    generatedTiles,
+    skippedTiles,
+    currentZ: ZMAX - 1,
+  });
 
   for (let z = ZMAX - 1; z >= 0; z--) {
     const { width, height } = tileGridSizeAtZoom(map, z);
     for (let x = 0; x < width; x++) {
       for (let y = 0; y < height; y++) {
-        const children = childrenOf(z, x, y);
-        const hasChildren = await Promise.all(
-          children.map((child) => readTileFile(mapId, child.z, child.x, child.y)),
-        ).then((buffers: (Buffer | null)[]) => buffers.some((buffer) => buffer !== null));
-        if (hasChildren) {
-          await generateParentTile(mapId, z, x, y);
+        const childBuffers = await readBaselineChildBuffers(mapId, z, x, y);
+        if (hasAnyChildBuffers(childBuffers)) {
+          await generateParentTile(mapId, z, x, y, childBuffers);
+          generatedTiles += 1;
+        } else {
+          skippedTiles += 1;
         }
+        processedTiles += 1;
+        options.onProgress?.({
+          totalTiles,
+          processedTiles,
+          generatedTiles,
+          skippedTiles,
+          currentZ: z,
+        });
+      }
+    }
+  }
+}
+
+export async function generateAllParentTilesAtNode(
+  context: TimelineContext,
+  options: GenerateAllParentTilesOptions = {},
+) {
+  const map = await getTilemapManifest(context.mapId);
+  if (!map) throw new Error(`Tilemap "${context.mapId}" not found`);
+
+  const totalTiles = countTotalParentTilesForMap(map.width, map.height);
+  let processedTiles = 0;
+  let generatedTiles = 0;
+  let skippedTiles = 0;
+  options.onProgress?.({
+    totalTiles,
+    processedTiles,
+    generatedTiles,
+    skippedTiles,
+    currentZ: ZMAX - 1,
+  });
+
+  for (let z = ZMAX - 1; z >= 0; z--) {
+    const { width, height } = tileGridSizeAtZoom(map, z);
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < height; y++) {
+        const childBuffers = await readTimelineChildBuffers(context, z, x, y);
+        const effectiveParentMeta = await resolveEffectiveTileMeta(context, z, x, y);
+        const shouldRegenerate =
+          hasAnyChildBuffers(childBuffers) ||
+          effectiveParentMeta.status !== "EMPTY" ||
+          effectiveParentMeta.sourceIndex !== null;
+
+        if (shouldRegenerate) {
+          const parentTile = await generateParentTileAtNode(context, z, x, y, childBuffers);
+          if (parentTile) {
+            generatedTiles += 1;
+          } else {
+            skippedTiles += 1;
+          }
+        } else {
+          skippedTiles += 1;
+        }
+
+        processedTiles += 1;
+        options.onProgress?.({
+          totalTiles,
+          processedTiles,
+          generatedTiles,
+          skippedTiles,
+          currentZ: z,
+        });
       }
     }
   }

@@ -15,12 +15,14 @@ import { ReviewQueue, type ReviewDecision, type ReviewQueueState } from "@/lib/b
 
 const TileControls = dynamic(() => import("./TileControls"), { ssr: false });
 const MAX_Z = Number(process.env.NEXT_PUBLIC_ZMAX ?? 8);
-const DEFAULT_INITIAL_ZOOM = 3;
+const MIN_Z = 3;
+const DEFAULT_INITIAL_ZOOM = MIN_Z;
 
 type Props = {
   mapId: string;
   mapWidth: number;
   mapHeight: number;
+  mode?: "editor" | "final";
 };
 
 type TilePoint = { x: number; y: number; screenX: number; screenY: number };
@@ -54,7 +56,7 @@ function parseInitialView() {
   const params = new URLSearchParams(window.location.search);
   const parsedZoom = parseFiniteNumberParam(params, "z");
   const zoom =
-    parsedZoom == null ? DEFAULT_INITIAL_ZOOM : Math.max(0, Math.min(MAX_Z, Math.round(parsedZoom)));
+    parsedZoom == null ? DEFAULT_INITIAL_ZOOM : Math.max(MIN_Z, Math.min(MAX_Z, Math.round(parsedZoom)));
 
   const parsedLat = parseFiniteNumberParam(params, "lat");
   const parsedLng = parseFiniteNumberParam(params, "lng");
@@ -120,9 +122,13 @@ async function waitForDecisionWithAbort<T>(promise: Promise<T>, signal: AbortSig
   });
 }
 
-export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
+export default function MapClient({ mapId, mapWidth, mapHeight, mode = "editor" }: Props) {
+  const isFinalView = mode === "final";
   const mapElementRef = useRef<HTMLDivElement>(null);
+  const minimapElementRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  const minimapRef = useRef<any>(null);
+  const minimapViewportRef = useRef<any>(null);
   const tileLayerRef = useRef<any>(null);
   const mapSessionRef = useRef(0);
   const searchParams = useSearchParamsHook();
@@ -137,11 +143,14 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
   const [tileExists, setTileExists] = useState<Record<string, boolean>>({});
   const tileExistsRef = useRef<Record<string, boolean>>({});
   const updateTimeoutRef = useRef<any>(undefined);
+  const [currentZoom, setCurrentZoom] = useState<number | null>(null);
 
   const [timelineNodes, setTimelineNodes] = useState<TimelineNodeItem[]>([]);
   const [minTimelineNodes, setMinTimelineNodes] = useState(1);
   const [timelineLoading, setTimelineLoading] = useState(false);
-  const [activeTimelineIndex, setActiveTimelineIndex] = useState(() => parsePositiveInt(searchParams?.get("t") ?? null, 1));
+  const [activeTimelineIndex, setActiveTimelineIndex] = useState(() =>
+    isFinalView ? 1 : parsePositiveInt(searchParams?.get("t") ?? null, 1),
+  );
   const activeTimelineRef = useRef(activeTimelineIndex);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchOrigin, setBatchOrigin] = useState<{ x: number; y: number } | null>(null);
@@ -194,8 +203,13 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
     (mapInstance: any | null, timelineIndex = activeTimelineRef.current) => {
       if (typeof window === "undefined") return;
       const params = new URLSearchParams(window.location.search);
-      params.set("mapId", mapId);
-      params.set("t", String(timelineIndex));
+      if (isFinalView) {
+        params.delete("mapId");
+        params.delete("t");
+      } else {
+        params.set("mapId", mapId);
+        params.set("t", String(timelineIndex));
+      }
       if (mapInstance) {
         const center = mapInstance.getCenter();
         const zoom = mapInstance.getZoom();
@@ -205,7 +219,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
       }
       window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
     },
-    [mapId],
+    [isFinalView, mapId],
   );
 
   const applyTimelineSelection = useCallback(
@@ -276,7 +290,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
       const tileLayer: any = tileLayerRef.current;
       if (!mapInstance || !tileLayer || leafTiles.length === 0) return;
 
-      const currentZoom = Math.max(0, Math.min(MAX_Z, Math.round(mapInstance.getZoom())));
+      const currentZoom = Math.max(MIN_Z, Math.min(MAX_Z, Math.round(mapInstance.getZoom())));
       const divisor = 2 ** Math.max(0, MAX_Z - currentZoom);
       const targetTileKeys = new Set<string>();
       for (const tile of leafTiles) {
@@ -690,6 +704,15 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
   }, [applyTimelineSelection, mapId, refreshVisibleTiles]);
 
   useEffect(() => {
+    if (isFinalView) {
+      activeTimelineRef.current = 1;
+      setActiveTimelineIndex(1);
+      setTimelineNodes([]);
+      setMinTimelineNodes(1);
+      setTimelineLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setTimelineLoading(true);
     void reloadTimeline(activeTimelineRef.current)
@@ -706,9 +729,11 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [applyTimelineSelection, reloadTimeline]);
+  }, [applyTimelineSelection, isFinalView, reloadTimeline]);
 
   useEffect(() => {
+    if (isFinalView) return;
+
     const onPointerDown = (event: PointerEvent) => {
       if (!selectedTileRef.current) return;
       const target = event.target as HTMLElement | null;
@@ -727,7 +752,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, []);
+  }, [isFinalView]);
 
   useEffect(() => {
     if (!mapElementRef.current || mapRef.current) return;
@@ -743,9 +768,10 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
 
       const mapInstance: any = L.map(mapElementRef.current, {
         crs: L.CRS.Simple,
-        minZoom: 0,
+        minZoom: MIN_Z,
         maxZoom: MAX_Z,
         zoom: initialView.zoom,
+        attributionControl: false,
       });
       mapElementRef.current.style.background = "#000";
       mapInstance.getContainer().style.background = "#000";
@@ -763,11 +789,12 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
       } else {
         mapInstance.setView(bounds.getCenter(), initialView.zoom);
       }
+      setCurrentZoom(mapInstance.getZoom());
 
       const url = withMapTimeline(`/api/tiles/{z}/{x}/{y}?v=${Date.now()}`, mapId, activeTimelineRef.current);
       const tileLayer = L.tileLayer(url, {
         tileSize: 256,
-        minZoom: 0,
+        minZoom: MIN_Z,
         maxZoom: MAX_Z,
         noWrap: true,
         updateWhenIdle: false,
@@ -777,84 +804,158 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
       tileLayer.addTo(mapInstance);
       tileLayerRef.current = tileLayer;
 
-      mapInstance.on("moveend", () => updateURL(mapInstance, sessionId));
-      mapInstance.on("zoomend", () => updateURL(mapInstance, sessionId));
-
-      const updateSelectedPosition = () => {
-        const current = selectedTileRef.current;
-        if (!current) return;
-        const tileCenterWorld = L.point((current.x + 0.5) * 256, (current.y + 0.5) * 256);
-        const tileCenterLatLng = mapInstance.unproject(tileCenterWorld, mapInstance.getZoom());
-        const tileCenterScreen = mapInstance.latLngToContainerPoint(tileCenterLatLng);
-        setSelectedTile((prev) => (prev ? { ...prev, screenX: tileCenterScreen.x, screenY: tileCenterScreen.y } : prev));
+      const handleMoveEnd = () => updateURL(mapInstance, sessionId);
+      const handleZoomEnd = () => {
+        setCurrentZoom(mapInstance.getZoom());
+        updateURL(mapInstance, sessionId);
       };
-      mapInstance.on("move", updateSelectedPosition);
-      mapInstance.on("zoomend", updateSelectedPosition);
+      mapInstance.on("moveend", handleMoveEnd);
+      mapInstance.on("zoomend", handleZoomEnd);
 
-      mapInstance.on("mousemove", (event: any) => {
-        if (mapInstance.getZoom() !== mapInstance.getMaxZoom()) {
+      if (isFinalView && minimapElementRef.current) {
+        const minimapInstance: any = L.map(minimapElementRef.current, {
+          crs: L.CRS.Simple,
+          minZoom: 0,
+          maxZoom: MAX_Z,
+          zoomControl: false,
+          attributionControl: false,
+          dragging: false,
+          scrollWheelZoom: false,
+          doubleClickZoom: false,
+          boxZoom: false,
+          keyboard: false,
+          touchZoom: false,
+          zoomAnimation: false,
+          fadeAnimation: false,
+          markerZoomAnimation: false,
+          inertia: false,
+        });
+        minimapElementRef.current.style.background = "#000";
+        minimapInstance.getContainer().style.background = "#000";
+        minimapInstance.setMaxBounds(bounds);
+        minimapInstance.dragging.disable();
+        minimapInstance.scrollWheelZoom.disable();
+        minimapInstance.doubleClickZoom.disable();
+        minimapInstance.boxZoom.disable();
+        minimapInstance.keyboard.disable();
+        minimapInstance.touchZoom.disable();
+        if (minimapInstance.tap) minimapInstance.tap.disable();
+
+        L.tileLayer(withMapTimeline(`/api/tiles/{z}/{x}/{y}?v=${Date.now()}`, mapId, activeTimelineRef.current), {
+          tileSize: 256,
+          minZoom: 0,
+          maxZoom: MAX_Z,
+          noWrap: true,
+          updateWhenIdle: false,
+          updateWhenZooming: false,
+          keepBuffer: 1,
+        }).addTo(minimapInstance);
+
+        minimapInstance.fitBounds(bounds, {
+          padding: [8, 8],
+          animate: false,
+        });
+
+        const viewportRect = L.rectangle(mapInstance.getBounds(), {
+          color: "#ffffff",
+          weight: 1,
+          opacity: 0.95,
+          fillOpacity: 0,
+          interactive: false,
+        }).addTo(minimapInstance);
+
+        const syncMinimapViewport = () => {
+          viewportRect.setBounds(mapInstance.getBounds());
+        };
+
+        syncMinimapViewport();
+        mapInstance.on("move", syncMinimapViewport);
+        mapInstance.on("zoom", syncMinimapViewport);
+        minimapInstance.on("click", (event: any) => {
+          mapInstance.setView(event.latlng, mapInstance.getZoom(), { animate: false });
+        });
+
+        minimapRef.current = minimapInstance;
+        minimapViewportRef.current = viewportRect;
+      }
+
+      if (!isFinalView) {
+        const updateSelectedPosition = () => {
+          const current = selectedTileRef.current;
+          if (!current) return;
+          const tileCenterWorld = L.point((current.x + 0.5) * 256, (current.y + 0.5) * 256);
+          const tileCenterLatLng = mapInstance.unproject(tileCenterWorld, mapInstance.getZoom());
+          const tileCenterScreen = mapInstance.latLngToContainerPoint(tileCenterLatLng);
+          setSelectedTile((prev) => (prev ? { ...prev, screenX: tileCenterScreen.x, screenY: tileCenterScreen.y } : prev));
+        };
+        mapInstance.on("move", updateSelectedPosition);
+        mapInstance.on("zoomend", updateSelectedPosition);
+
+        mapInstance.on("mousemove", (event: any) => {
+          if (mapInstance.getZoom() !== mapInstance.getMaxZoom()) {
+            setHoveredTile(null);
+            mapInstance.getContainer().style.cursor = "";
+            return;
+          }
+
+          const projected = mapInstance.project(event.latlng, mapInstance.getZoom());
+          const x = Math.floor(projected.x / 256);
+          const y = Math.floor(projected.y / 256);
+          if (!isMaxZoomTileInBounds(x, y)) {
+            setHoveredTile(null);
+            mapInstance.getContainer().style.cursor = "";
+            return;
+          }
+
+          const currentHovered = hoveredTileRef.current;
+          if (!currentHovered || currentHovered.x !== x || currentHovered.y !== y) {
+            const tileCenterWorld = L.point((x + 0.5) * 256, (y + 0.5) * 256);
+            const tileCenterLatLng = mapInstance.unproject(tileCenterWorld, mapInstance.getZoom());
+            const tileCenterScreen = mapInstance.latLngToContainerPoint(tileCenterLatLng);
+            setHoveredTile({ x, y, screenX: tileCenterScreen.x, screenY: tileCenterScreen.y });
+            mapInstance.getContainer().style.cursor = "pointer";
+            const t = activeTimelineRef.current;
+            const key = timelineKey(t, x, y);
+            if (!(key in tileExistsRef.current)) void checkTileExists(x, y, t);
+          }
+        });
+
+        mapInstance.on("mouseleave", () => {
           setHoveredTile(null);
           mapInstance.getContainer().style.cursor = "";
-          return;
-        }
+        });
 
-        const projected = mapInstance.project(event.latlng, mapInstance.getZoom());
-        const x = Math.floor(projected.x / 256);
-        const y = Math.floor(projected.y / 256);
-        if (!isMaxZoomTileInBounds(x, y)) {
+        mapInstance.on("zoomstart", () => {
           setHoveredTile(null);
-          mapInstance.getContainer().style.cursor = "";
-          return;
-        }
+          setSelectedTile(null);
+        });
 
-        const currentHovered = hoveredTileRef.current;
-        if (!currentHovered || currentHovered.x !== x || currentHovered.y !== y) {
+        mapInstance.on("click", (event: any) => {
+          if (mapInstance.getZoom() !== mapInstance.getMaxZoom()) return;
+          if (performance.now() < suppressOpenUntil.current) return;
+
+          const projected = mapInstance.project(event.latlng, mapInstance.getZoom());
+          const x = Math.floor(projected.x / 256);
+          const y = Math.floor(projected.y / 256);
+          if (!isMaxZoomTileInBounds(x, y)) return;
+
+          if (selectedTileRef.current) {
+            setSelectedTile(null);
+            selectedTileRef.current = null;
+            return;
+          }
+
           const tileCenterWorld = L.point((x + 0.5) * 256, (y + 0.5) * 256);
           const tileCenterLatLng = mapInstance.unproject(tileCenterWorld, mapInstance.getZoom());
           const tileCenterScreen = mapInstance.latLngToContainerPoint(tileCenterLatLng);
-          setHoveredTile({ x, y, screenX: tileCenterScreen.x, screenY: tileCenterScreen.y });
-          mapInstance.getContainer().style.cursor = "pointer";
+          setSelectedTile({ x, y, screenX: tileCenterScreen.x, screenY: tileCenterScreen.y });
           const t = activeTimelineRef.current;
           const key = timelineKey(t, x, y);
           if (!(key in tileExistsRef.current)) void checkTileExists(x, y, t);
-        }
-      });
+        });
+      }
 
-      mapInstance.on("mouseleave", () => {
-        setHoveredTile(null);
-        mapInstance.getContainer().style.cursor = "";
-      });
-
-      mapInstance.on("zoomstart", () => {
-        setHoveredTile(null);
-        setSelectedTile(null);
-      });
-
-      mapInstance.on("click", (event: any) => {
-        if (mapInstance.getZoom() !== mapInstance.getMaxZoom()) return;
-        if (performance.now() < suppressOpenUntil.current) return;
-
-        const projected = mapInstance.project(event.latlng, mapInstance.getZoom());
-        const x = Math.floor(projected.x / 256);
-        const y = Math.floor(projected.y / 256);
-        if (!isMaxZoomTileInBounds(x, y)) return;
-
-        if (selectedTileRef.current) {
-          setSelectedTile(null);
-          selectedTileRef.current = null;
-          return;
-        }
-
-        const tileCenterWorld = L.point((x + 0.5) * 256, (y + 0.5) * 256);
-        const tileCenterLatLng = mapInstance.unproject(tileCenterWorld, mapInstance.getZoom());
-        const tileCenterScreen = mapInstance.latLngToContainerPoint(tileCenterLatLng);
-        setSelectedTile({ x, y, screenX: tileCenterScreen.x, screenY: tileCenterScreen.y });
-        const t = activeTimelineRef.current;
-        const key = timelineKey(t, x, y);
-        if (!(key in tileExistsRef.current)) void checkTileExists(x, y, t);
-      });
-
-      if (!initialView.hasZoomParam) writeUrlState(mapInstance, activeTimelineRef.current);
+      if (!initialView.hasZoomParam || isFinalView) writeUrlState(mapInstance, activeTimelineRef.current);
     });
 
     return () => {
@@ -862,6 +963,11 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
       mapSessionRef.current += 1;
       if (updateTimeoutRef.current) clearTimeout(updateTimeoutRef.current);
       tileLayerRef.current = null;
+      minimapViewportRef.current = null;
+      if (minimapRef.current) {
+        minimapRef.current.remove();
+        minimapRef.current = null;
+      }
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -869,7 +975,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
       hoveredTileRef.current = null;
       selectedTileRef.current = null;
     };
-  }, [checkTileExists, isMaxZoomTileInBounds, mapHeight, mapId, mapWidth, timelineKey, updateURL, writeUrlState]);
+  }, [checkTileExists, isFinalView, isMaxZoomTileInBounds, mapHeight, mapId, mapWidth, timelineKey, updateURL, writeUrlState]);
 
   const batchRunning = batchState?.status === "RUNNING" || batchState?.status === "COMPLETING";
   const reviewStatus = {
@@ -877,20 +983,26 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
     active: reviewActiveItem ? 1 : 0,
     queued: reviewPendingItems.length,
   };
-
   return (
     <div className="w-full h-full relative">
-      <div className="p-3 z-10 absolute top-2 left-2 bg-white/90 rounded-xl shadow-lg flex flex-col gap-2">
-        <div className="text-sm text-gray-600">
-          {mapRef.current && mapRef.current.getZoom() === MAX_Z ? "Hover to highlight, click to open menu" : "Zoom to max level"}
+      {!isFinalView && (
+        <div className="p-3 z-10 absolute top-2 left-2 bg-white/90 rounded-xl shadow-lg flex flex-col gap-2">
+          <div className="text-sm text-gray-600">{currentZoom === MAX_Z ? "Hover to highlight, click to open menu" : "Zoom to max level"}</div>
+          <div className="text-xs text-gray-400">
+            map={mapId} size={mapWidth}x{mapHeight}
+          </div>
+          <div className="text-xs text-gray-400">Timeline: {activeTimelineIndex}</div>
         </div>
-        <div className="text-xs text-gray-400">
-          map={mapId} size={mapWidth}x{mapHeight}
-        </div>
-        <div className="text-xs text-gray-400">Timeline: {activeTimelineIndex}</div>
-      </div>
+      )}
 
-      {hoveredTile && !selectedTile && mapRef.current && mapRef.current.getZoom() === MAX_Z && (
+      {isFinalView && (
+        <div className="absolute top-2 right-2 z-[2000] rounded-xl bg-black/65 p-2 shadow-lg backdrop-blur-sm pointer-events-auto">
+          <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.22em] text-white/70">Click to jump</div>
+          <div ref={minimapElementRef} className="h-36 w-36 overflow-hidden rounded-lg border border-white/20 bg-black sm:h-44 sm:w-44" />
+        </div>
+      )}
+
+      {!isFinalView && hoveredTile && !selectedTile && mapRef.current && mapRef.current.getZoom() === MAX_Z && (
         <div
           className="absolute"
           style={{
@@ -905,7 +1017,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
         />
       )}
 
-      {selectedTile && mapRef.current && mapRef.current.getZoom() === MAX_Z && (
+      {!isFinalView && selectedTile && mapRef.current && mapRef.current.getZoom() === MAX_Z && (
         <div
           className="absolute pointer-events-none"
           style={{ left: selectedTile.screenX, top: selectedTile.screenY, transform: "translate(-50%, -50%)", zIndex: 500 }}
@@ -943,7 +1055,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
         </div>
       )}
 
-      {batchOrigin && (
+      {!isFinalView && batchOrigin && (
         <BatchGenerateModal
           open={batchModalOpen}
           running={batchRunning}
@@ -954,20 +1066,22 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
         />
       )}
 
-      <BatchReviewModal
-        open={batchRunning && reviewStatus.enabled && reviewActiveItem != null}
-        mapId={mapId}
-        item={reviewActiveItem}
-        pendingCount={reviewStatus.queued}
-        busy={reviewBusy}
-        onAccept={() => resolveReviewDecision("ACCEPT")}
-        onReject={() => resolveReviewDecision("REJECT")}
-        onCancelBatch={cancelBatchRun}
-      />
+      {!isFinalView && (
+        <BatchReviewModal
+          open={batchRunning && reviewStatus.enabled && reviewActiveItem != null}
+          mapId={mapId}
+          item={reviewActiveItem}
+          pendingCount={reviewStatus.queued}
+          busy={reviewBusy}
+          onAccept={() => resolveReviewDecision("ACCEPT")}
+          onReject={() => resolveReviewDecision("REJECT")}
+          onCancelBatch={cancelBatchRun}
+        />
+      )}
 
-      <BatchStatusPanel state={batchState} onCancel={cancelBatchRun} review={reviewStatus} />
+      {!isFinalView && <BatchStatusPanel state={batchState} onCancel={cancelBatchRun} review={reviewStatus} />}
 
-      {timelineNodes.length > 0 && (
+      {!isFinalView && timelineNodes.length > 0 && (
         <TimelineBar
           nodes={timelineNodes}
           activeIndex={activeTimelineIndex}
@@ -987,7 +1101,7 @@ export default function MapClient({ mapId, mapWidth, mapHeight }: Props) {
         />
       )}
 
-      <div ref={mapElementRef} className="w-full h-full" />
+      <div ref={mapElementRef} className="relative z-0 w-full h-full" />
     </div>
   );
 }

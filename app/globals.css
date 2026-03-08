@@ -1,2 +1,10 @@
 @import "tailwindcss";
 html, body, #__next { height: 100%; }
+
+body:has(.final-map-route) nextjs-portal,
+body:has(.final-map-route) [data-next-badge-root],
+body:has(.final-map-route) [data-next-badge],
+body:has(.final-map-route) [data-nextjs-toast],
+body:has(.final-map-route) [data-next-mark] {
+  display: none !important;
+}
